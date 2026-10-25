@@ -252,8 +252,12 @@ jobs:
           if ($p.ExitCode) { throw "install failed: $($p.ExitCode)" }
           $app = "$env:ProgramFiles\CamAndroid"
           Get-ChildItem -Recurse $app | Select-Object FullName
-          reg query "HKLM\Software\Classes\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32"
-          reg query "HKLM\Software\Classes\WOW6432Node\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32"
+          foreach ($key in @("HKLM\Software\Classes\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32",
+                             "HKLM\Software\Classes\WOW6432Node\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32",
+                             "HKLM\Software\Classes\CLSID\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\Instance\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}")) {
+            reg query $key
+            if ($LASTEXITCODE) { throw "missing after install: $key" }
+          }
           & "$app\adb\adb.exe" version; if ($LASTEXITCODE) { exit 1 }
           $p = Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
           if ($p.ExitCode) { throw "uninstall failed: $($p.ExitCode)" }
