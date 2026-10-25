@@ -438,9 +438,13 @@ jobs:
 
       - name: Store the new signing key in the repository
         if: needs.android.outputs.signing == 'generated'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          OWNER_ID: ${{ github.repository_owner_id }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Committed under the repository owner's GitHub no-reply address.
+          git config user.name "$OWNER"
+          git config user.email "$OWNER_ID+$OWNER@users.noreply.github.com"
           git fetch origin "$DEFAULT_BRANCH"
           git checkout -B add-signing-key "origin/$DEFAULT_BRANCH"
           mkdir -p android/signing

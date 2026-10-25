@@ -118,7 +118,7 @@ the JVM. The Android app module adds only the UI, the camera and the system inte
 
 ## CI/CD
 
-**Every push to the default branch publishes a new release** on the Releases page, versioned
+**Every push to `main` (the default branch) publishes a new release** on the Releases page, versioned
 `v<VERSION>.<build number>` (for example `v0.3.42`), with:
 
 - `CamAndroid-<version>.apk`: the Android app
