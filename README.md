@@ -4,35 +4,33 @@ Use your Android phone's camera as a webcam on your computer, over Wi-Fi or USB.
 
 - **Android app** (`android/`): Kotlin, Jetpack Compose, CameraX. Runs a TLS server in a foreground
   service, so it keeps streaming with the screen off.
-- **Desktop app** (`desktop/`): Python. Has a GUI and a CLI, runs on Windows, macOS and Linux, and
-  outputs to a virtual webcam that Zoom, Teams, Meet, OBS and other apps can select.
+- **Windows desktop app** (`desktop/`): Python, packaged as a single `camandroid.exe`. Has a GUI and a CLI,
+  and outputs to a virtual webcam that Zoom, Teams, Meet, OBS and other apps can select.
 - **CI/CD** (`.github/workflows/ci.yml`): builds and tests both apps, runs the Python client against the
   real Kotlin server, and publishes a GitHub Release when you push a `v*` tag.
 
 ```
- Phone (CamAndroid app)                         Computer (camandroid)
+ Phone (CamAndroid app)                         Windows PC (camandroid.exe)
  CameraX → JPEG ─┐                            ┌─→ decode/rotate/scale → virtual webcam
-                 └── TLS :4747 (Wi-Fi / USB) ─┘    (OBS Virtual Camera / v4l2loopback)
+                 └── TLS :4747 (Wi-Fi / USB) ─┘    (OBS Virtual Camera driver)
 ```
 
 ## Quick start
 
 ### 1. Install the virtual camera driver (one time)
 
-| OS | What to install |
-|---|---|
-| Windows | [OBS Studio](https://obsproject.com/). It includes the *OBS Virtual Camera* driver. |
-| macOS | OBS Studio 30+. Start its Virtual Camera once so macOS approves the system extension. |
-| Linux | `sudo apt install v4l2loopback-dkms` then `sudo modprobe v4l2loopback devices=1 exclusive_caps=1 card_label="CamAndroid"` |
+Install [OBS Studio](https://obsproject.com/). It includes the *OBS Virtual Camera* driver that
+camandroid writes to. You don't need to keep OBS running.
 
 ### 2. Install the apps
 
 Download from the [Releases](../../releases) page (or from the artifacts of any CI run):
 
 - `CamAndroid-<version>.apk`: install it on the phone. Allow "install unknown apps" if prompted.
-- `camandroid-windows-x86_64.exe`, `camandroid-macos-arm64.zip` or `camandroid-linux-x86_64`.
+- `camandroid-windows-x86_64.exe`: run it on the PC. It is unsigned, so SmartScreen may warn you;
+  choose *More info → Run anyway*. Allow it through Windows Firewall on **private** networks when asked.
 
-The desktop app can also be installed from source: `pip install ./desktop` and then run `camandroid`.
+The desktop app can also be installed from source with Python 3.10+: `pip install ./desktop` and then run `camandroid`.
 
 ### 3. Pair (one time)
 
@@ -45,8 +43,7 @@ If discovery is blocked (guest Wi-Fi, firewall), use **Pair by address…** with
 
 ### 4. Stream
 
-Select the phone and click **Start webcam**. In your video app, pick **OBS Virtual Camera** (Windows
-or macOS) or **CamAndroid** (Linux).
+Select the phone and click **Start webcam**. In your video app, pick **OBS Virtual Camera**.
 
 You can change the camera, flashlight, quality, rotation, mirroring and crop-to-fill while streaming.
 To change resolution or frame rate, stop the webcam first.
@@ -55,7 +52,7 @@ To change resolution or frame rate, stop the webcam first.
 
 USB gives lower latency and no Wi-Fi congestion. Enable *Developer options → USB debugging* on the
 phone, install [platform-tools](https://developer.android.com/tools/releases/platform-tools) (`adb`)
-on the computer, plug in the cable and tick **Connect over USB**. The desktop app runs
+on the PC, plug in the cable and tick **Connect over USB**. The desktop app runs
 `adb forward` for you. Pairing works the same way over USB.
 
 ## CLI
@@ -72,7 +69,7 @@ camandroid probe 192.168.1.20    # TLS version, cipher, certificate fingerprint
 camandroid forget "Pixel 8"
 ```
 
-On Windows the packaged `.exe` is a windowed GUI app. To use the CLI there, install with `pip install ./desktop`.
+The packaged `.exe` is a windowed app, so CLI output is only visible when installed with `pip install ./desktop`.
 
 ## Security
 
@@ -106,9 +103,9 @@ Every push and pull request runs:
 | Job | What it does |
 |---|---|
 | Android app | Core unit tests, Android lint, unit tests, debug and release APK builds (uploaded as artifacts) |
-| Desktop | ruff and pytest on Windows, macOS and Linux, plus a PyInstaller build for each OS (uploaded as artifacts) |
+| Desktop (Windows) | ruff and pytest, then a PyInstaller build of `camandroid-windows-x86_64.exe` (uploaded as an artifact) |
 | Interop | Starts the Kotlin server with a fake camera and runs the Python client against it |
-| Release | On a `v*` tag, publishes a GitHub Release with the APK, the desktop binaries and SHA256SUMS |
+| Release | On a `v*` tag, publishes a GitHub Release with the APK, the Windows exe and SHA256SUMS |
 
 To cut a release: `git tag v0.1.0 && git push origin v0.1.0`.
 
@@ -119,7 +116,8 @@ APK. To get a signed release APK, create a keystore once:
 
 ```
 keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias camandroid
-base64 -w0 release.jks   # macOS: base64 -i release.jks
+# PowerShell: copy the keystore as base64 to the clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks")) | Set-Clipboard
 ```
 
 Then add these repository secrets (*Settings → Secrets and variables → Actions*):
@@ -130,8 +128,8 @@ Keep `release.jks` backed up somewhere safe: updates must be signed with the sam
 
 - **Phone not discovered**: some routers block mDNS between clients. Use *Pair by address* with the IP
   shown in the app, or use USB.
-- **"Could not open a virtual camera"**: the driver from step 1 is missing. On Linux, check that
-  `/dev/video*` exists for v4l2loopback.
+- **"Could not open a virtual camera"**: OBS Studio from step 1 is not installed, or another app is
+  already using OBS Virtual Camera. Stop OBS's own virtual camera if it is running.
 - **Fingerprint mismatch**: you reinstalled the app or cleared its data, which creates a new identity.
   Click *Forget* and pair again. If you did neither, treat it as a possible interception.
 - **Choppy video**: lower the quality or resolution, use 5 GHz Wi-Fi, or switch to USB.

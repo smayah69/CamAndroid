@@ -1,7 +1,5 @@
-# PyInstaller spec: builds a single-file `camandroid` executable (GUI by default, CLI with arguments).
+# PyInstaller spec: builds camandroid.exe (GUI when double-clicked, CLI when given arguments).
 # -*- mode: python ; coding: utf-8 -*-
-import sys
-
 from PyInstaller.utils.hooks import collect_submodules
 
 a = Analysis(
@@ -16,8 +14,6 @@ exe = EXE(
     a.binaries,
     a.datas,
     name="camandroid",
-    console=sys.platform != "win32",  # no console window when double-clicked on Windows
+    console=False,  # no console window when double-clicked
     upx=False,
 )
-if sys.platform == "darwin":
-    app = BUNDLE(exe, name="CamAndroid.app", bundle_identifier="com.camandroid.desktop")
