@@ -77,7 +77,7 @@ jobs:
           java-version: 17
 
       # Also validates the Gradle wrapper checksum.
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # The release APK is built unsigned; it is signed in the next step with apksigner, so the
       # signing key and its password are never exposed to Gradle or its plugins.
@@ -377,7 +377,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
