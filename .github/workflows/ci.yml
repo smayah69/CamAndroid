@@ -199,7 +199,7 @@ jobs:
           Copy-Item build/vcam-Win32/Release/vcamtest.exe windows/vcam/dist/vcamtest32.exe
           Get-ChildItem windows/vcam/dist
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -289,7 +289,7 @@ jobs:
           Copy-Item "$src/adb.exe", "$src/AdbWinApi.dll", "$src/AdbWinUsbApi.dll", "$src/NOTICE.txt" windows/adb/
           windows/adb/adb.exe version
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -378,7 +378,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install desktop client
