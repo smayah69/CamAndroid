@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Omar Kharrat (@smayah69)" }]
 dependencies = [
-    "av>=14",  # FFmpeg H.264 decoder
     "numpy>=1.24",
     "Pillow>=10.0",
     "zeroconf>=0.131",
@@ -21,7 +20,9 @@ Homepage = "https://github.com/smayah69/CamAndroid"
 Releases = "https://github.com/smayah69/CamAndroid/releases"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "cryptography>=42"]
+# av (FFmpeg) makes H.264 test streams, and decodes H.264 when running outside Windows. The
+# Windows app decodes with Media Foundation (windows/vcam/src/h264dec.cpp) instead.
+dev = ["pytest>=8", "ruff>=0.6", "cryptography>=42", "av>=14"]
 build = ["pyinstaller>=6.10"]
 
 [project.scripts]

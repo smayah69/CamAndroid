@@ -57,7 +57,8 @@ while streaming. To change resolution or frame rate, stop the webcam first.
 
 The phone encodes **H.264 in hardware** and holds the camera at a fixed frame rate, so 60 fps works
 at 720p and 1080p on phones whose camera supports 60 fps (most recent ones do; others give 30).
-720p60 needs about 6 Mbit/s. The status bar shows the real frame rate and bitrate. In video apps,
+720p60 needs about 6 Mbit/s. The PC decodes it with Windows' built-in H.264 decoder (Media Foundation),
+so the app stays small and needs nothing extra. The status bar shows the real frame rate and bitrate. In video apps,
 choose a 60 fps format if the app lets you (OBS, Discord); many apps such as Teams and Meet use 30.
 
 The **Logs** tab shows what the app is doing (also saved to `%APPDATA%\CamAndroid\logs`). The

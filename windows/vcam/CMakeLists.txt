@@ -24,3 +24,9 @@ target_link_libraries(vcam PRIVATE strmiids ole32 oleaut32 uuid gdi32 advapi32)
 add_executable(vcamtest test/vcamtest.cpp)
 target_compile_definitions(vcamtest PRIVATE UNICODE _UNICODE)
 target_link_libraries(vcamtest PRIVATE strmiids ole32 oleaut32 uuid)
+
+# H.264 decoder for camandroid.exe (Media Foundation), loaded with ctypes.
+add_library(h264dec SHARED src/h264dec.cpp)
+set_target_properties(h264dec PROPERTIES OUTPUT_NAME camandroid-h264)
+target_compile_definitions(h264dec PRIVATE UNICODE _UNICODE)
+target_link_libraries(h264dec PRIVATE mfplat mfuuid ole32 uuid)

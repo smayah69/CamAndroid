@@ -34,16 +34,37 @@ def available_codecs() -> list[str]:
 @functools.cache
 def _codecs() -> tuple[str, ...]:
     try:
-        import av
-
-        av.CodecContext.create("h264", "r")
-    except Exception:  # noqa: BLE001 - missing or broken FFmpeg: JPEG still works
+        H264Decoder().close()
+    except Exception as e:  # noqa: BLE001 - no usable decoder: JPEG still works
+        log.warning("H.264 decoding unavailable, the phone will send JPEG: %s", e)
         return ("jpeg",)
     return ("h264", "jpeg")
 
 
-class H264Decoder:
-    """Low-latency FFmpeg H.264 decoder: frames come out as soon as they go in."""
+class _MFBackend:
+    """Windows' Media Foundation decoder (what the released app uses)."""
+
+    name = "Media Foundation"
+
+    def __init__(self):
+        from .mfdecoder import MFDecoder
+
+        self._dec = MFDecoder()
+
+    def decode(self, data: bytes) -> tuple[int, int] | None:
+        return self._dec.size if self._dec.decode(data) else None
+
+    def picture(self, width: int, height: int) -> np.ndarray:
+        return self._dec.to_rgb(width, height)
+
+    def close(self) -> None:
+        self._dec.close()
+
+
+class _FFmpegBackend:
+    """FFmpeg through PyAV, for development on other systems (pip install av)."""
+
+    name = "FFmpeg"
 
     def __init__(self):
         import av
@@ -51,29 +72,66 @@ class H264Decoder:
 
         self._av = av
         self.ctx = av.CodecContext.create("h264", "r")
-        self.ctx.flags |= int(Flags.low_delay)
+        self.ctx.flags |= int(Flags.low_delay)  # no reordering delay: frames come out as they go in
         self.ctx.thread_type = "SLICE"  # frame threading would add a frame of delay per thread
+        self._frame = None
+
+    def decode(self, data: bytes) -> tuple[int, int] | None:
+        frames = self.ctx.decode(self._av.Packet(data))
+        if not frames:
+            return None
+        self._frame = frames[-1]
+        return self._frame.width, self._frame.height
+
+    def picture(self, width: int, height: int) -> np.ndarray:
+        return self._frame.reformat(width=width, height=height, format="rgb24").to_ndarray()
+
+    def close(self) -> None:
+        self._frame = None
+
+
+class H264Decoder:
+    """Low-latency H.264 decoder that skips ahead to the next key frame after an error."""
+
+    def __init__(self):
+        errors = []
+        for backend in (_MFBackend, _FFmpegBackend):
+            try:
+                self._backend = backend()
+                self.name = backend.name
+                break
+            except Exception as e:  # noqa: BLE001 - try the next one
+                errors.append(f"{backend.name}: {e}")
+        else:
+            raise RuntimeError("; ".join(errors))
         self._synced = False
 
-    def decode(self, frame: Frame):
-        """Returns the decoded av.VideoFrame, or None while waiting for a key frame."""
+    def decode(self, frame: Frame) -> tuple[int, int] | None:
+        """Returns the picture size when a new picture is ready, or None (waiting for more data)."""
         if not self._synced and not frame.flags & FLAG_KEY_FRAME:
             return None
         try:
-            frames = self.ctx.decode(self._av.Packet(frame.data))
-        except self._av.error.FFmpegError as e:
+            size = self._backend.decode(frame.data)
+        except Exception as e:  # noqa: BLE001 - corrupt data must not end the stream
             log.warning("H.264 decode error, waiting for the next key frame: %s", e)
             self._synced = False
             return None
         self._synced = True
-        return frames[-1] if frames else None
+        return size
+
+    def picture(self, width: int, height: int) -> np.ndarray:
+        """The latest picture, scaled to width x height while converting to RGB."""
+        return self._backend.picture(width, height)
+
+    def close(self) -> None:
+        self._backend.close()
 
 
 class Renderer:
     """Decodes frames and rotates, mirrors and scales them to the output size.
 
-    Scaling happens during decoding (libjpeg draft mode, or swscale for H.264) on the unrotated
-    image, so each frame is touched as few times as possible.
+    Scaling happens during decoding (libjpeg draft mode) or the YUV to RGB conversion (H.264) on
+    the unrotated image, so each frame is touched as few times as possible.
     """
 
     def __init__(self, opts: OutputOptions):
@@ -98,12 +156,21 @@ class Renderer:
             self.codec = "h264"
             if self._h264 is None:
                 self._h264 = H264Decoder()
-            decoded = self._h264.decode(frame)
-            if decoded is None:
+                log.info("Decoding H.264 with %s", self._h264.name)
+            size = self._h264.decode(frame)
+            if size is None:
                 return None
-            w, h = _scaled_size((decoded.width, decoded.height), swap, opts)
-            arr = decoded.reformat(width=w, height=h, format="rgb24").to_ndarray()
+            arr = self._h264.picture(*_scaled_size(size, swap, opts))
         return compose(arr, rotation, opts)
+
+    @property
+    def decoder_name(self) -> str:
+        return self._h264.name if self._h264 else ""
+
+    def close(self) -> None:
+        if self._h264:
+            self._h264.close()
+            self._h264 = None
 
 
 def _scaled_size(size: tuple[int, int], swap: bool, opts: OutputOptions) -> tuple[int, int]:

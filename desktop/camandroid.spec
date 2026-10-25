@@ -13,6 +13,7 @@ from camandroid_desktop.icon import save_ico
 VCAM_DIR = os.environ.get("CAMANDROID_VCAM_BUILD", "../windows/vcam/dist")
 ADB_DIR = os.environ.get("CAMANDROID_ADB_BUILD", "../windows/adb")
 datas = [(os.path.join(VCAM_DIR, f), "vcam") for f in ("camandroid-vcam64.dll", "camandroid-vcam32.dll")]
+datas += [(os.path.join(VCAM_DIR, "camandroid-h264.dll"), "codec")]  # Media Foundation H.264 decoder
 datas += [(os.path.join(ADB_DIR, f), "adb") for f in os.listdir(ADB_DIR)] if os.path.isdir(ADB_DIR) else []
 datas = [d for d in datas if os.path.isfile(d[0])]
 
@@ -57,8 +58,9 @@ def windows_version_info():
 a = Analysis(
     ["launcher.py"],
     datas=datas,
-    hiddenimports=collect_submodules("zeroconf") + collect_submodules("av"),
-    excludes=["matplotlib", "scipy", "pandas"],
+    hiddenimports=collect_submodules("zeroconf"),
+    # av (FFmpeg) is only for development; it would add ~30 MB.
+    excludes=["matplotlib", "scipy", "pandas", "av"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(

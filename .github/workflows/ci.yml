@@ -195,6 +195,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force windows/vcam/dist | Out-Null
           Copy-Item build/vcam-x64/Release/camandroid-vcam64.dll, build/vcam-Win32/Release/camandroid-vcam32.dll windows/vcam/dist/
+          Copy-Item build/vcam-x64/Release/camandroid-h264.dll windows/vcam/dist/
           Copy-Item build/vcam-x64/Release/vcamtest.exe windows/vcam/dist/vcamtest64.exe
           Copy-Item build/vcam-Win32/Release/vcamtest.exe windows/vcam/dist/vcamtest32.exe
           Get-ChildItem windows/vcam/dist
@@ -250,6 +251,7 @@ jobs:
           path: |
             windows/vcam/dist/camandroid-vcam64.dll
             windows/vcam/dist/camandroid-vcam32.dll
+            windows/vcam/dist/camandroid-h264.dll
           if-no-files-found: error
 
   desktop:
@@ -306,13 +308,15 @@ jobs:
 
       - name: Test
         working-directory: desktop
+        env:
+          CAMANDROID_CODEC_DIR: ${{ github.workspace }}\windows\vcam\dist  # test the Media Foundation decoder
         run: python -m pytest -v
 
       - name: Sign camera DLLs
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: ./windows/sign.ps1 windows/vcam/dist/camandroid-vcam64.dll windows/vcam/dist/camandroid-vcam32.dll
+        run: ./windows/sign.ps1 windows/vcam/dist/camandroid-vcam64.dll windows/vcam/dist/camandroid-vcam32.dll windows/vcam/dist/camandroid-h264.dll
 
       - name: Build camandroid.exe
         working-directory: desktop
@@ -361,6 +365,10 @@ jobs:
           $p = Start-Process "$app\camandroid.exe" -ArgumentList "selftest","--out","`"$report`"" -Wait -PassThru
           Get-Content $report
           if ($p.ExitCode) { throw "camandroid selftest failed: $($p.ExitCode)" }
+          if (-not (Select-String -Quiet "Media Foundation" $report)) { throw "not using the Windows H.264 decoder" }
+          $mb = [math]::Round((Get-Item "$app\camandroid.exe").Length / 1MB, 1)
+          Write-Host "camandroid.exe: $mb MB"
+          if ($mb -gt 45) { throw "camandroid.exe grew to $mb MB; check what PyInstaller bundled" }
           $info = (Get-Item "$app\camandroid.exe").VersionInfo
           $info | Format-List CompanyName, FileDescription, ProductVersion, LegalCopyright
           if ($info.CompanyName -ne "Omar Kharrat") { throw "missing version resource" }

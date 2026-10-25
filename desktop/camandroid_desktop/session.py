@@ -185,6 +185,7 @@ class StreamSession(threading.Thread):
     def _stream_once(self, vcam) -> None:
         conn = connect(self.store, self.target)
         self._conn = conn
+        renderer = None
         try:
             if self._stop_event.is_set():
                 return
@@ -233,6 +234,8 @@ class StreamSession(threading.Thread):
         finally:
             self._conn = None
             conn.close()
+            if renderer:
+                renderer.close()
 
     def _flush_pending(self, conn: PhoneConnection) -> None:
         while True:

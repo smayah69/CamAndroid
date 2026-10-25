@@ -223,8 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# 32x32 H.264 key frame (SPS, PPS, IDR) of the colour (30, 200, 90).
-_H264_SAMPLE = "AAAAAWdCwAraJaEAAAMAAQAAAwA8jxImoAAAAAFozg/IAAABZYiEOhGKAAWjgACAvHAAEIOTrrw="
+# 64x64 H.264 key frame (SPS, PPS, IDR) of the colour (30, 200, 90). Windows' decoder needs 48x48+.
+_H264_SAMPLE = "AAAAAWdCwAraEJoQAAADABAAAAMDyPEiagAAAAFozg/IAAABZYiEOhGKAAWjgACAvHAAEIOTk5OuuuuuuuuuuuvA"
 
 
 def cmd_selftest(args, store) -> int:
@@ -235,10 +235,12 @@ def cmd_selftest(args, store) -> int:
     lines, ok = [f"camandroid {__version__}"], True
     try:
         frame = protocol.Frame(0, 0, protocol.FLAG_KEY_FRAME, base64.b64decode(_H264_SAMPLE))
-        arr = Renderer(OutputOptions(32, 32, mirror=False)).render(frame)
-        r, g, b = (int(v) for v in arr[16, 16])
+        renderer = Renderer(OutputOptions(64, 64, mirror=False))
+        arr = renderer.render(frame)
+        r, g, b = (int(v) for v in arr[32, 32])
         good = abs(r - 30) < 12 and abs(g - 200) < 12 and abs(b - 90) < 12
-        lines.append(f"h264 decode: {'ok' if good else 'WRONG COLOUR'} ({r},{g},{b})")
+        lines.append(f"h264 decode ({renderer.decoder_name}): {'ok' if good else 'WRONG COLOUR'} ({r},{g},{b})")
+        renderer.close()
         ok &= good
     except Exception as e:  # noqa: BLE001 - report any failure
         lines.append(f"h264 decode: FAILED ({e})")
