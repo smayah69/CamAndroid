@@ -258,8 +258,13 @@ jobs:
     name: Windows app (exe + installer)
     needs: [version, vcam]
     runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: read  # SignPath downloads the unsigned artifacts with this job's token
     env:
       VERSION_NAME: ${{ needs.version.outputs.version }}
+      # Release builds are signed by SignPath once the project is set up (see README > Code signing).
+      SIGNPATH: ${{ secrets.SIGNPATH_API_TOKEN != '' && needs.version.outputs.release == 'true' }}
     defaults:
       run:
         shell: pwsh
@@ -328,6 +333,42 @@ jobs:
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
         run: ./windows/sign.ps1 desktop/dist/camandroid.exe
 
+      - name: Collect camandroid.exe and the camera DLLs for SignPath
+        if: env.SIGNPATH == 'true'
+        run: |
+          New-Item -ItemType Directory -Force signpath/app/vcam | Out-Null
+          Copy-Item desktop/dist/camandroid.exe signpath/app/
+          Copy-Item windows/vcam/dist/camandroid-vcam64.dll, windows/vcam/dist/camandroid-vcam32.dll signpath/app/vcam/
+
+      - id: unsigned-app
+        if: env.SIGNPATH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-app
+          path: signpath/app
+          if-no-files-found: error
+
+      - name: Sign exe and camera DLLs (SignPath)
+        if: env.SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'CamAndroid' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY || 'release-signing' }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600  # release signing may wait for your approval
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
+          output-artifact-directory: signpath/app-signed
+
+      - name: Use the signed exe and DLLs
+        if: env.SIGNPATH == 'true'
+        run: |
+          Copy-Item signpath/app-signed/camandroid.exe desktop/dist/ -Force
+          Copy-Item signpath/app-signed/vcam/*.dll windows/vcam/dist/ -Force
+          ./windows/verify-signatures.ps1 desktop/dist/camandroid.exe windows/vcam/dist/camandroid-vcam64.dll windows/vcam/dist/camandroid-vcam32.dll
+
       - name: Build installer
         run: |
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
@@ -336,6 +377,34 @@ jobs:
           } else { $iscc = (Get-Command iscc).Source }
           & $iscc /Qp "/DAppVersion=$env:VERSION_NAME" windows/installer/camandroid.iss
           if ($LASTEXITCODE) { exit 1 }
+
+      - id: unsigned-installer
+        if: env.SIGNPATH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: desktop/out/CamAndroid-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Sign installer (SignPath)
+        if: env.SIGNPATH == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'CamAndroid' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY || 'release-signing' }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600  # release signing may wait for your approval
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          output-artifact-directory: signpath/installer-signed
+
+      - name: Use the signed installer
+        if: env.SIGNPATH == 'true'
+        run: |
+          Copy-Item signpath/installer-signed/*.exe desktop/out/ -Force
+          ./windows/verify-signatures.ps1 "desktop/out/CamAndroid-Setup-$env:VERSION_NAME.exe"
 
       - name: Sign installer and collect outputs
         env:
@@ -372,6 +441,9 @@ jobs:
           $info = (Get-Item "$app\camandroid.exe").VersionInfo
           $info | Format-List CompanyName, FileDescription, ProductVersion, LegalCopyright
           if ($info.CompanyName -ne "Omar Kharrat") { throw "missing version resource" }
+          if ($env:SIGNPATH -eq "true") {
+            ./windows/verify-signatures.ps1 "$app\camandroid.exe" "$app\vcam\camandroid-vcam64.dll" "$app\vcam\camandroid-vcam32.dll"
+          }
           $p = Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
           if ($p.ExitCode) { throw "uninstall failed: $($p.ExitCode)" }
           Start-Sleep 3

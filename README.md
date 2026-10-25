@@ -34,8 +34,8 @@ automatically for every update:
 There is also `CamAndroid-<version>-portable.exe`, which needs no installer and no admin rights. On
 first start it offers to install the camera for your Windows user only.
 
-If you haven't added a code-signing certificate (see [Signing](#signing)), Windows SmartScreen will
-warn about an unknown publisher. Choose *More info → Run anyway*.
+Until the Windows app is signed and has built up reputation (see [Signing](#signing)), Windows
+SmartScreen may warn about an unknown publisher. Choose *More info → Run anyway*.
 
 ### 2. Pair (one time)
 
@@ -170,14 +170,13 @@ The camera is a **user-mode** COM DLL loaded by video apps, not a kernel driver.
 driver signing (WHQL or attestation) for it, and installing it never needs test-signing mode or
 Secure Boot changes.
 
-Authenticode signing is still worth doing: it removes the SmartScreen "unknown publisher" warning and
-makes antivirus software less suspicious. Signing needs a code-signing certificate issued to you (OV/EV
-from a CA, or [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)). Nobody else
-can obtain one for you, because the CA verifies your identity. Once you have a `.pfx`, add these
-repository secrets and CI signs both camera DLLs, `camandroid.exe` and the installer:
-
-- `WINDOWS_SIGNING_PFX_BASE64`: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")) | Set-Clipboard`
-- `WINDOWS_SIGNING_PFX_PASSWORD`
+Authenticode signing is still worth doing: it builds SmartScreen reputation for the publisher, so the
+"unknown publisher" warning goes away after enough downloads, and makes antivirus software less
+suspicious. Release builds are signed through SignPath Foundation (see
+[Code signing policy](#code-signing-policy)). A certificate you own also works: add its `.pfx` as
+`WINDOWS_SIGNING_PFX_BASE64` (`[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`)
+and `WINDOWS_SIGNING_PFX_PASSWORD`. New certificates live on hardware tokens or cloud HSMs and can't
+be exported as a `.pfx`, so SignPath is the practical route for CI.
 
 A self-signed certificate doesn't help other people. It is only trusted on machines where you import it.
 
@@ -202,6 +201,43 @@ installs fine, but you have to uninstall it once before installing the first per
 To use your own keystore instead, set `ANDROID_KEYSTORE_BASE64` (the keystore, base64-encoded),
 `ANDROID_KEYSTORE_PASSWORD`, and optionally `ANDROID_KEY_ALIAS` (default `camandroid`) and
 `ANDROID_KEY_PASSWORD`.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [smayah69](https://github.com/smayah69)
+- Approvers: [smayah69](https://github.com/smayah69)
+
+Only files built from this repository by GitHub Actions are signed: `camandroid.exe`, the
+CamAndroid camera DLLs and the installer. The installer also contains Google's `adb`, which keeps
+Google's own signature.
+
+Setup: the CI submits release builds to SignPath once these exist in *Settings › Secrets and
+variables › Actions*: the secret `SIGNPATH_API_TOKEN` and the variable `SIGNPATH_ORGANIZATION_ID`
+(optional: `SIGNPATH_PROJECT_SLUG`, default `CamAndroid`, and `SIGNPATH_SIGNING_POLICY`, default
+`release-signing`). The SignPath project needs the artifact configurations `app` and `installer`
+from [`.signpath/artifact-configurations`](.signpath/artifact-configurations).
+
+### Privacy
+
+CamAndroid sends no data anywhere except what it needs to work:
+
+- Video goes only from your phone to the computers you paired, over your own network or USB,
+  encrypted with TLS.
+- The Windows app asks `api.github.com` for the latest release when it starts and when you click
+  *Check for updates*, and downloads updates from `github.com` only when you click to install.
+- The Android app reads `bombo.cu.ma/extras/camandroid/version.json` when it opens (at most every
+  6 hours) and when you tap *Check for updates*, and downloads updates from there only when you tap
+  to download.
+
+These requests carry nothing but the app version (in the User-Agent). There are no accounts,
+analytics or tracking.
+
+## License
+
+[MIT](LICENSE) © Omar Kharrat ([@smayah69](https://github.com/smayah69))
 
 ## Troubleshooting
 

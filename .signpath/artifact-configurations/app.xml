@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "app": camandroid.exe and the camera DLLs, uploaded by the
+     "Windows app" CI job as the GitHub artifact "unsigned-app". Paste into the SignPath project. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="camandroid.exe" product-name="CamAndroid">
+      <authenticode-sign />
+    </pe-file>
+    <directory path="vcam">
+      <pe-file path="camandroid-vcam64.dll" product-name="CamAndroid">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="camandroid-vcam32.dll" product-name="CamAndroid">
+        <authenticode-sign />
+      </pe-file>
+    </directory>
+  </zip-file>
+</artifact-configuration>

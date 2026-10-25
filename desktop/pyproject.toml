@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,7 @@ description = "Use your Android phone as a webcam: desktop companion for the Cam
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Omar Kharrat (@smayah69)" }]
+license = "MIT"
 dependencies = [
     "numpy>=1.24",
     "Pillow>=10.0",

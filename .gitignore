@@ -19,3 +19,4 @@ desktop/out/
 *.jks
 *.keystore
 build/
+signpath/
