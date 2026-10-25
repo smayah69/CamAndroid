@@ -27,8 +27,27 @@ def make_jpeg(width: int, height: int, color=(200, 80, 20)) -> bytes:
     return buf.getvalue()
 
 
+def make_h264(width: int, height: int, count: int = 15, color=(200, 80, 20)) -> list[tuple[int, bytes]]:
+    """One GOP like the phone's encoder sends: Annex-B, no B-frames, SPS/PPS on the key frame."""
+    from fractions import Fraction
+
+    import av
+
+    enc = av.CodecContext.create("libx264", "w")
+    enc.width, enc.height, enc.pix_fmt = width, height, "yuv420p"
+    enc.time_base = Fraction(1, 30)
+    enc.options = {"tune": "zerolatency", "bframes": "0", "preset": "ultrafast", "x264-params": "repeat-headers=1"}
+    frame = av.VideoFrame.from_image(Image.new("RGB", (width, height), color)).reformat(format="yuv420p")
+    out = []
+    for i in range(count):
+        frame.pts = i
+        out += [(p.FLAG_KEY_FRAME if pkt.is_keyframe else 0, bytes(pkt)) for pkt in enc.encode(frame)]
+    out += [(p.FLAG_KEY_FRAME if pkt.is_keyframe else 0, bytes(pkt)) for pkt in enc.encode(None)]
+    return out
+
+
 class MockPhone:
-    def __init__(self, rotation: int = 0):
+    def __init__(self, rotation: int = 0, codecs: tuple[str, ...] = ("jpeg",)):
         key = ec.generate_private_key(ec.SECP256R1())
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "CamAndroid")])
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -49,6 +68,8 @@ class MockPhone:
         self.code: str | None = None
         self.clients: dict[str, str] = {}
         self.rotation = rotation
+        self.codecs = list(codecs)
+        self.codec = ""  # what the last stream used
         self.started_with: dict | None = None
         self.updates: list[dict] = []
         self._server = socket.create_server(("127.0.0.1", 0))
@@ -106,19 +127,27 @@ class MockPhone:
                 return self._error(s, "unknown_client")
             if req["proof"] != p.auth_proof(token, self.fingerprint, nonce, cn, client_id):
                 return self._error(s, "bad_proof")
-        p.write_control(s, {"op": "auth_ok", "cameras": ["back", "front"]})
+        p.write_control(s, {"op": "auth_ok", "cameras": ["back", "front"], "codecs": self.codecs})
         s.settimeout(0.02)
-        jpeg = None
+        frames: list[tuple[int, bytes]] = []
+        n = 0
         while not self._stop.is_set():
             try:
                 msg = p.read_message(s)
                 if msg["op"] == "start":
                     self.started_with = msg
-                    jpeg = make_jpeg(msg["width"], msg["height"])
-                    p.write_control(s, {"op": "started"})
+                    codec = next((c for c in msg.get("codecs", []) if c in self.codecs), "jpeg")
+                    if codec == "h264":
+                        frames = make_h264(msg["width"], msg["height"])
+                    else:
+                        frames = [(p.FLAG_KEY_FRAME, make_jpeg(msg["width"], msg["height"]))]
+                    self.codec = codec
+                    p.write_control(s, {"op": "started", "codec": codec})
                 elif msg["op"] == "update":
                     self.updates.append(msg)
             except TimeoutError:
                 pass
-            if jpeg:
-                s.sendall(p.encode_frame(p.Frame(int(time.time() * 1e6), self.rotation, 0, jpeg)))
+            if frames:
+                flags, data = frames[n % len(frames)]
+                n += 1
+                s.sendall(p.encode_frame(p.Frame(int(time.time() * 1e6), self.rotation, flags, data)))

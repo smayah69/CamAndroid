@@ -1,7 +1,7 @@
 // Test consumer for the CamAndroid virtual camera. It does what a video-call app does: find the
 // device in "Video Capture Sources", build a capture graph, and pull frames.
 //
-//   vcamtest [--size WxH] [--seconds N] [--expect R,G,B] [--feed R,G,B] [--list]
+//   vcamtest [--size WxH] [--fps N] [--seconds N] [--expect R,G,B] [--feed R,G,B] [--list]
 //
 // --feed also acts as the writer (solid colour frames through shared memory), to test the
 // reader path without camandroid.exe. Exit code 0 means frames arrived (and matched --expect).
@@ -109,7 +109,7 @@ static DWORD WINAPI Feed(LPVOID arg) {
 }
 
 int main(int argc, char** argv) {
-    int width = 0, height = 0, seconds = 3;
+    int width = 0, height = 0, seconds = 3, fps = 0;
     int expect[3] = {-1, -1, -1};
     int feed[3] = {-1, -1, -1};
     bool listOnly = false;
@@ -117,6 +117,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "--size" && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &width, &height);
         else if (a == "--seconds" && i + 1 < argc) seconds = std::atoi(argv[++i]);
+        else if (a == "--fps" && i + 1 < argc) fps = std::atoi(argv[++i]);
         else if (a == "--expect" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d,%d", &expect[0], &expect[1], &expect[2]);
         else if (a == "--feed" && i + 1 < argc) std::sscanf(argv[++i], "%d,%d,%d", &feed[0], &feed[1], &feed[2]);
         else if (a == "--list") listOnly = true;
@@ -180,7 +181,8 @@ int main(int argc, char** argv) {
             VIDEO_STREAM_CONFIG_CAPS caps;
             if (cfg->GetStreamCaps(i, &mt, reinterpret_cast<BYTE*>(&caps)) != S_OK) continue;
             auto* vih = reinterpret_cast<VIDEOINFOHEADER*>(mt->pbFormat);
-            if (vih->bmiHeader.biWidth == width && vih->bmiHeader.biHeight == height)
+            const bool rateMatches = fps <= 0 || vih->AvgTimePerFrame == 10000000 / fps;
+            if (vih->bmiHeader.biWidth == width && vih->bmiHeader.biHeight == height && rateMatches)
                 set = SUCCEEDED(hr = cfg->SetFormat(mt));
             CoTaskMemFree(mt->pbFormat);
             CoTaskMemFree(mt);
@@ -253,6 +255,7 @@ int main(int argc, char** argv) {
                 center[1], center[2], top[0], top[1], top[2], bottom[0], bottom[1], bottom[2]);
 
     if (frames < seconds * 5) return Fail("too few frames", E_FAIL);
+    if (fps > 0 && frames < static_cast<long>(seconds) * fps * 8 / 10) return Fail("frame rate too low", E_FAIL);
     if (width > 0 && (w != width || h != height)) return Fail("negotiated size differs", E_FAIL);
     if (expect[0] >= 0) {
         const int* probe = g_split ? top : center;

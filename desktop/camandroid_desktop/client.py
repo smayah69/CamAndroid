@@ -5,10 +5,11 @@ from __future__ import annotations
 import hmac
 import socket
 import ssl
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from . import protocol as p
 from .store import DeviceStore, PairedDevice
+from .video import available_codecs
 
 
 class CamAndroidError(Exception):
@@ -37,6 +38,7 @@ class StreamSettings:
     quality: int = 80
     camera: str = "back"
     torch: bool = False
+    codecs: list[str] = field(default_factory=available_codecs)  # preference order; the phone picks
 
 
 class PhoneConnection:
@@ -67,6 +69,7 @@ class PhoneConnection:
         self.device_name = ""
         self.pairing_open = False
         self.cameras: list[str] = []
+        self.codecs: list[str] = ["jpeg"]  # what the phone can encode; older apps only send JPEG
         self._server_nonce = ""
 
     # -- handshake ---------------------------------------------------------------------------
@@ -132,6 +135,7 @@ class PhoneConnection:
         if reply.get("op") != "auth_ok":
             raise RemoteError("protocol", f"unexpected reply {reply.get('op')!r}")
         self.cameras = [c for c in reply.get("cameras", []) if isinstance(c, str)]
+        self.codecs = [c for c in reply.get("codecs", []) if isinstance(c, str)] or ["jpeg"]
 
     def _expect_control(self) -> dict:
         msg = p.read_message(self.sock)

@@ -62,7 +62,8 @@ class VirtualCamera:
         n = w * h * 3
         self._seq += 1  # odd: readers skip the frame while we write
         struct.pack_into("<I", self._view, SEQ_OFFSET, self._seq)
-        self._pixels[:n] = np.ascontiguousarray(frame).reshape(-1)
+        # One strided copy straight into shared memory, whatever the frame's memory layout.
+        self._pixels[:n].reshape(h, w, 3)[...] = frame
         self._index += 1
         HEADER.pack_into(self._view, 0, MAGIC, VERSION, w, h, self._seq, self.fps, self._index,
                          int(time.time() * 1000))

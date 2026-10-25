@@ -7,7 +7,7 @@ import getpass
 import sys
 import time
 
-from . import __version__, adb, protocol
+from . import __version__, adb, logs, protocol
 from .camera_install import CameraInstallError
 from .client import CamAndroidError, PhoneConnection, StreamSettings
 from .session import SessionCallbacks, StreamSession, Target, connect
@@ -191,12 +191,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stream", help="stream a paired phone to the virtual webcam")
     add_connection(p, "paired device name/id or address; optional if only one phone is paired")
     p.add_argument("--size", type=_parse_size, default=(1280, 720), help="output size (default 1280x720)")
-    p.add_argument("--fps", type=int, default=30)
-    p.add_argument("--quality", type=int, default=80, help="JPEG quality 30-100")
+    p.add_argument("--fps", type=int, default=60)
+    p.add_argument("--quality", type=int, default=80, help="video quality 30-100 (sets the H.264 bitrate)")
     p.add_argument("--camera", choices=["back", "front"], default="back")
     p.add_argument("--torch", action="store_true")
     p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0, help="extra clockwise rotation")
-    p.add_argument("--mirror", action="store_true")
+    p.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True,
+                   help="mirror the image (default: on)")
     p.add_argument("--fill", action="store_true", help="crop to fill the frame instead of letterboxing")
     p.add_argument("--no-vcam", action="store_true", help="receive and decode only (testing)")
     p.set_defaults(func=cmd_stream)
@@ -210,13 +211,70 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
     p.set_defaults(func=cmd_probe)
 
+    p = sub.add_parser("selftest", help="check that video decoding works in this build")
+    p.add_argument("--out", help="also write the report to this file (the GUI build has no console)")
+    p.set_defaults(func=cmd_selftest)
+
+    p = sub.add_parser("update", help="check GitHub for a newer version")
+    p.set_defaults(func=cmd_update)
+
     p = sub.add_parser("gui", help="open the graphical interface (default)")
     p.set_defaults(func=None)
     return parser
 
 
+# 32x32 H.264 key frame (SPS, PPS, IDR) of the colour (30, 200, 90).
+_H264_SAMPLE = "AAAAAWdCwAraJaEAAAMAAQAAAwA8jxImoAAAAAFozg/IAAABZYiEOhGKAAWjgACAvHAAEIOTrrw="
+
+
+def cmd_selftest(args, store) -> int:
+    import base64
+
+    from .video import Renderer, available_codecs
+
+    lines, ok = [f"camandroid {__version__}"], True
+    try:
+        frame = protocol.Frame(0, 0, protocol.FLAG_KEY_FRAME, base64.b64decode(_H264_SAMPLE))
+        arr = Renderer(OutputOptions(32, 32, mirror=False)).render(frame)
+        r, g, b = (int(v) for v in arr[16, 16])
+        good = abs(r - 30) < 12 and abs(g - 200) < 12 and abs(b - 90) < 12
+        lines.append(f"h264 decode: {'ok' if good else 'WRONG COLOUR'} ({r},{g},{b})")
+        ok &= good
+    except Exception as e:  # noqa: BLE001 - report any failure
+        lines.append(f"h264 decode: FAILED ({e})")
+        ok = False
+    lines.append(f"codecs offered to the phone: {', '.join(available_codecs())}")
+    try:
+        lines.append(f"adb: {adb.find_adb()}")
+    except adb.AdbError as e:
+        lines.append(f"adb: {e}")
+    report = "\n".join(lines + ["OK" if ok else "FAILED"])
+    if sys.stdout:
+        print(report)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(report + "\n")
+    return 0 if ok else 1
+
+
+def cmd_update(args, store) -> int:
+    from . import updates
+
+    try:
+        release = updates.fetch_latest()
+    except updates.UpdateError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    if updates.is_newer(release.version):
+        print(f"CamAndroid {release.version} is available (you have {__version__}): {release.url}")
+    else:
+        print(f"CamAndroid {__version__} is up to date.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    logs.setup()
     if getattr(args, "func", None) is None:
         from .gui import main as gui_main
 

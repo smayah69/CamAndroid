@@ -235,6 +235,7 @@ jobs:
           & "$t/vcamtest64.exe" --seconds 2;                                                     if ($LASTEXITCODE) { exit 1 }
           & "$t/vcamtest64.exe" --size 640x480 --seconds 2 --feed 200,40,120 --expect 200,40,120;  if ($LASTEXITCODE) { exit 1 }
           & "$t/vcamtest64.exe" --size 1920x1080 --seconds 2 --feed 250,250,0 --split --expect 250,250,0; if ($LASTEXITCODE) { exit 1 }
+          & "$t/vcamtest64.exe" --size 1280x720 --fps 60 --seconds 3 --feed 90,90,250 --expect 90,90,250; if ($LASTEXITCODE) { exit 1 }
           & "$t/vcamtest32.exe" --size 1280x720 --seconds 2 --feed 10,220,30 --expect 10,220,30;   if ($LASTEXITCODE) { exit 1 }
 
       - name: End-to-end from Python writer (vcamtest + OpenCV)
@@ -355,6 +356,14 @@ jobs:
             if ($LASTEXITCODE) { throw "missing after install: $key" }
           }
           & "$app\adb\adb.exe" version; if ($LASTEXITCODE) { exit 1 }
+          # The GUI exe has no console, so the self-test report goes to a file.
+          $report = "$env:RUNNER_TEMP\selftest.txt"
+          $p = Start-Process "$app\camandroid.exe" -ArgumentList "selftest","--out","`"$report`"" -Wait -PassThru
+          Get-Content $report
+          if ($p.ExitCode) { throw "camandroid selftest failed: $($p.ExitCode)" }
+          $info = (Get-Item "$app\camandroid.exe").VersionInfo
+          $info | Format-List CompanyName, FileDescription, ProductVersion, LegalCopyright
+          if ($info.CompanyName -ne "Omar Kharrat") { throw "missing version resource" }
           $p = Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
           if ($p.ExitCode) { throw "uninstall failed: $($p.ExitCode)" }
           Start-Sleep 3

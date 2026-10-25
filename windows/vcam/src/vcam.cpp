@@ -14,7 +14,9 @@
 #include <dshow.h>
 #include <olectl.h>
 
+#include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cstring>
 #include <cwchar>
 #include <new>
@@ -60,6 +62,13 @@ static const int kNumSizes = sizeof(kSizes) / sizeof(kSizes[0]);
 static const REFERENCE_TIME kDefaultInterval = 10000000 / 30;
 static const REFERENCE_TIME kMinInterval = 10000000 / 60;
 static const REFERENCE_TIME kMaxInterval = 10000000 / 5;
+// Every size is offered at 30 fps (first, the default) and again at 60 fps.
+static const int kNumCaps = kNumSizes * 2;
+
+static VideoFormat CapFormat(int index) {
+    const int i = index % kNumSizes;
+    return VideoFormat{kSizes[i][0], kSizes[i][1], index < kNumSizes ? kDefaultInterval : kMinInterval, false};
+}
 
 static int StrideOf(int width) { return (width * 3 + 3) & ~3; }
 
@@ -743,7 +752,7 @@ std::vector<VideoFormat> VCamPin::OfferedFormats() {
         list.push_back(preferred_);
         return list;
     }
-    for (int i = 0; i < kNumSizes; ++i) list.push_back({kSizes[i][0], kSizes[i][1], kDefaultInterval, false});
+    for (int i = 0; i < kNumCaps; ++i) list.push_back(CapFormat(i));
     return list;
 }
 
@@ -932,15 +941,15 @@ STDMETHODIMP VCamPin::GetFormat(AM_MEDIA_TYPE** ppmt) {
 
 STDMETHODIMP VCamPin::GetNumberOfCapabilities(int* count, int* size) {
     if (!count || !size) return E_POINTER;
-    *count = kNumSizes;
+    *count = kNumCaps;
     *size = sizeof(VIDEO_STREAM_CONFIG_CAPS);
     return S_OK;
 }
 
 STDMETHODIMP VCamPin::GetStreamCaps(int index, AM_MEDIA_TYPE** ppmt, BYTE* capsBytes) {
     if (!ppmt || !capsBytes) return E_POINTER;
-    if (index < 0 || index >= kNumSizes) return S_FALSE;
-    const VideoFormat f{kSizes[index][0], kSizes[index][1], kDefaultInterval, false};
+    if (index < 0 || index >= kNumCaps) return S_FALSE;
+    const VideoFormat f = CapFormat(index);
     *ppmt = CreateMediaType(f);
     if (!*ppmt) return E_OUTOFMEMORY;
     auto* caps = reinterpret_cast<VIDEO_STREAM_CONFIG_CAPS*>(capsBytes);
@@ -956,9 +965,9 @@ STDMETHODIMP VCamPin::GetStreamCaps(int index, AM_MEDIA_TYPE** ppmt, BYTE* capsB
     caps->OutputGranularityX = caps->OutputGranularityY = 1;
     caps->MinFrameInterval = kMinInterval;
     caps->MaxFrameInterval = kMaxInterval;
-    const LONG bitsPerFrame = StrideOf(f.width) * f.height * 8;
-    caps->MinBitsPerSecond = bitsPerFrame * 5;
-    caps->MaxBitsPerSecond = bitsPerFrame * 60;
+    const LONGLONG bitsPerFrame = static_cast<LONGLONG>(StrideOf(f.width)) * f.height * 8;
+    caps->MinBitsPerSecond = static_cast<LONG>((std::min<LONGLONG>)(bitsPerFrame * 5, LONG_MAX));
+    caps->MaxBitsPerSecond = static_cast<LONG>((std::min<LONGLONG>)(bitsPerFrame * 60, LONG_MAX));
     return S_OK;
 }
 

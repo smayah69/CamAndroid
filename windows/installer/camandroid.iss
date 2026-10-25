@@ -2,7 +2,7 @@
 ; Installs camandroid.exe, registers the CamAndroid virtual camera for all users (64- and 32-bit
 ; apps), ships adb for USB connections and opens the firewall for phone discovery (mDNS).
 ;
-; Build: iscc /DAppVersion=1.2.3 /DSrcDir=... /DVcamDir=... /DAdbDir=... camandroid.iss
+; Build: iscc /DAppVersion=1.2.3 /DSrcDir=... /DVcamDir=... /DAdbDir=... /DIconFile=... camandroid.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -19,13 +19,29 @@
 #ifndef OutDir
   #define OutDir "..\..\desktop\out"
 #endif
+#ifndef IconFile
+  ; Written by desktop/camandroid.spec (same icon as the Android app).
+  #define IconFile "..\..\desktop\build\camandroid.ico"
+#endif
+; File version needs four numbers; "0.3.41-dev" -> "0.3.41.0".
+#define NumericVersion Copy(AppVersion, 1, Pos("-", AppVersion + "-") - 1) + ".0"
 
 [Setup]
 AppId={{5C7A4F0B-2D1E-4B8A-9F36-7E1C2A9D4B51}
 AppName=CamAndroid
 AppVersion={#AppVersion}
-AppPublisher=CamAndroid
+AppPublisher=Omar Kharrat
+AppPublisherURL=https://github.com/smayah69/CamAndroid
+AppSupportURL=https://github.com/smayah69/CamAndroid/issues
+AppUpdatesURL=https://github.com/smayah69/CamAndroid/releases
+AppCopyright=Copyright (C) 2026 Omar Kharrat (@smayah69)
 AppComments=Use your Android phone as a webcam
+VersionInfoVersion={#NumericVersion}
+VersionInfoCompany=Omar Kharrat
+VersionInfoDescription=CamAndroid installer
+VersionInfoCopyright=Copyright (C) 2026 Omar Kharrat (@smayah69)
+VersionInfoProductName=CamAndroid
+SetupIconFile={#IconFile}
 DefaultDirName={autopf}\CamAndroid
 DefaultGroupName=CamAndroid
 DisableProgramGroupPage=yes

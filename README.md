@@ -14,8 +14,8 @@ Use your Android phone's camera as a webcam on your computer, over Wi-Fi or USB.
 
 ```
  Phone (CamAndroid app)                       Windows PC
- CameraX → JPEG ─┐                          ┌─ camandroid.exe ── shared memory ──┐
-                 └─ TLS :4747 ──────────────┘   decode/rotate/scale             │
+ CameraX → H.264 ┐                          ┌─ camandroid.exe ── shared memory ──┐
+ (hardware)      └─ TLS :4747 ──────────────┘   decode/rotate/scale             │
                     Wi-Fi, or USB via the                                        ▼
                     bundled adb             Zoom / Teams / Chrome ◄─ CamAndroid camera DLL
 ```
@@ -52,8 +52,17 @@ Select the phone and click **Start webcam**. In Zoom, Teams, Meet or any other v
 **CamAndroid** as the camera. While the phone isn't sending, the camera shows a "Waiting for the
 phone…" picture, so apps never see a broken device.
 
-You can change the camera, flashlight, quality, rotation, mirroring and crop-to-fill while streaming.
-To change resolution or frame rate, stop the webcam first.
+You can change the camera, flashlight, quality, rotation, mirroring (on by default) and crop-to-fill
+while streaming. To change resolution or frame rate, stop the webcam first.
+
+The phone encodes **H.264 in hardware** and holds the camera at a fixed frame rate, so 60 fps works
+at 720p and 1080p on phones whose camera supports 60 fps (most recent ones do; others give 30).
+720p60 needs about 6 Mbit/s. The status bar shows the real frame rate and bitrate. In video apps,
+choose a 60 fps format if the app lets you (OBS, Discord); many apps such as Teams and Meet use 30.
+
+The **Logs** tab shows what the app is doing (also saved to `%APPDATA%\CamAndroid\logs`). The
+**About** tab checks GitHub for a newer release and, for the installed app, downloads and runs the
+new installer (the download's SHA-256 is checked against GitHub's).
 
 ### USB
 
@@ -63,7 +72,7 @@ anything on the PC.
 1. On the phone, enable *Developer options* (tap *Settings → About phone → Build number* 7 times),
    then turn on *USB debugging*.
 2. Plug in the cable and accept *Allow USB debugging?* on the phone (tick *Always allow*).
-3. In the PC app, tick **Connect over USB**, then pair or start as usual.
+3. The phone appears in the PC app's list with connection **USB**. Select it, then pair or start as usual.
 
 Most phones work with Windows' built-in USB driver. If `adb` can't see a Samsung, Xiaomi or other
 brand phone, install that manufacturer's USB driver once.
@@ -77,11 +86,13 @@ camandroid pair 192.168.1.20     # pair (prompts for the code)
 camandroid pair --usb            # pair over USB
 camandroid devices               # list paired phones
 camandroid stream                # stream the only paired phone to the virtual webcam
-camandroid stream --usb --size 1920x1080 --fps 30 --camera front --mirror
+camandroid stream --usb --size 1920x1080 --fps 60 --camera front --no-mirror
 camandroid probe 192.168.1.20    # TLS version, cipher, certificate fingerprint
 camandroid forget "Pixel 8"
 camandroid camera status         # is the CamAndroid camera installed?
 camandroid camera install        # install it for this Windows user (no admin)
+camandroid update                # check GitHub for a newer version
+camandroid selftest              # check that H.264 decoding works
 ```
 
 The packaged `.exe` is a windowed app, so CLI output is only visible when installed with `pip install ./desktop`.
@@ -194,4 +205,6 @@ To use your own keystore instead, set `ANDROID_KEYSTORE_BASE64` (the keystore, b
   charge), and that you accepted the prompt on the phone. A few brands need their own USB driver.
 - **Fingerprint mismatch**: you reinstalled the app or cleared its data, which creates a new identity.
   Click *Forget* and pair again. If you did neither, treat it as a possible interception.
-- **Choppy video**: lower the quality or resolution, use 5 GHz Wi-Fi, or switch to USB.
+- **Choppy video**: check the status bar and the Logs tab. If it says JPEG, update the phone app
+  (H.264 needs the new version on both sides). Otherwise lower the quality or resolution, use 5 GHz
+  Wi-Fi, or switch to USB.

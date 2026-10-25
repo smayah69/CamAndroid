@@ -1,9 +1,11 @@
 package com.camandroid.core
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import java.io.Closeable
 import java.io.IOException
@@ -87,7 +89,7 @@ class CamServer(
     }
 
     private inner class Session(private val socket: SSLSocket) : Closeable {
-        private val slot = FrameSlot()
+        private val queue = FrameQueue { source.requestKeyFrame() }
         private var clientName = "unknown"
         private var streaming = false
         private var config = StreamConfig()
@@ -114,6 +116,7 @@ class CamServer(
                 writer.writeControl(buildJsonObject {
                     put("op", "auth_ok")
                     putJsonArray("cameras") { source.cameras().forEach { add(it) } }
+                    putJsonArray("codecs") { source.codecs().forEach { add(it) } }
                 })
                 listener.onSessionStarted(clientName)
                 val sender = thread(name = "camserver-sender", isDaemon = true) { sendLoop(writer) }
@@ -198,9 +201,13 @@ class CamServer(
                 if (msg !is Message.Control) throw ProtocolException("protocol", "unexpected frame from client")
                 when (msg.op) {
                     "start" -> {
-                        config = parseConfig(msg.body, StreamConfig())
-                        if (streaming) source.update(config) else source.start(config) { jpeg, rotation, flags, ts ->
-                            slot.offer(PendingFrame(jpeg, rotation, flags, ts))
+                        config = parseConfig(msg.body, StreamConfig()).copy(codec = negotiateCodec(msg.body, source.codecs()))
+                        queue.maxBacklog = backlogFor(config.fps)
+                        val jpeg = config.codec == StreamConfig.CODEC_JPEG
+                        if (streaming) source.stop()
+                        source.start(config) { data, rotation, flags, ts ->
+                            val f = if (jpeg) flags or Protocol.FLAG_KEY_FRAME else flags
+                            queue.offer(PendingFrame(data, rotation, f, ts))
                         }
                         streaming = true
                         writer.writeControl(configMessage("started"))
@@ -227,8 +234,8 @@ class CamServer(
         private fun sendLoop(writer: MessageWriter) {
             try {
                 while (true) {
-                    val f = slot.take() ?: return
-                    writer.writeFrame(f.timestampUs, f.rotation, f.flags, f.jpeg)
+                    val f = queue.take() ?: return
+                    writer.writeFrame(f.timestampUs, f.rotation, f.flags, f.data)
                 }
             } catch (e: InterruptedException) {
                 // session ended
@@ -245,10 +252,11 @@ class CamServer(
             put("quality", config.quality)
             put("camera", config.camera)
             put("torch", config.torch)
+            put("codec", config.codec)
         }
 
         override fun close() {
-            slot.close()
+            queue.close()
             try {
                 socket.close()
             } catch (_: IOException) {
@@ -263,25 +271,50 @@ class CamServer(
         }
     }
 
-    private class PendingFrame(val jpeg: ByteArray, val rotation: Int, val flags: Int, val timestampUs: Long)
+    internal class PendingFrame(val data: ByteArray, val rotation: Int, val flags: Int, val timestampUs: Long) {
+        val isKey: Boolean get() = flags and Protocol.FLAG_KEY_FRAME != 0
+    }
 
-    /** Single-slot mailbox: a slow network drops stale frames instead of queueing latency. */
-    private class FrameSlot {
+    /**
+     * Frames waiting for the network. A slow network must cost frames, not latency: a key frame
+     * replaces everything still queued (so JPEG streams always send the newest frame), and when
+     * the backlog of H.264 frames grows too long it is dropped and a key frame is requested.
+     */
+    internal class FrameQueue(private val onOverflow: () -> Unit) {
         private val lock = ReentrantLock()
         private val available = lock.newCondition()
-        private var frame: PendingFrame? = null
+        private val frames = ArrayDeque<PendingFrame>()
         private var closed = false
+        private var waitingForKey = false
+        @Volatile var maxBacklog = 8
 
-        fun offer(f: PendingFrame) = lock.withLock {
-            if (!closed) {
-                frame = f
-                available.signal()
+        fun offer(f: PendingFrame) {
+            var overflow = false
+            lock.withLock {
+                if (closed) return
+                when {
+                    f.isKey -> {
+                        frames.clear()
+                        waitingForKey = false
+                    }
+                    waitingForKey -> return
+                    frames.size >= maxBacklog -> {
+                        frames.clear()
+                        waitingForKey = true
+                        overflow = true
+                    }
+                }
+                if (!waitingForKey) {
+                    frames.addLast(f)
+                    available.signal()
+                }
             }
+            if (overflow) onOverflow()
         }
 
         fun take(): PendingFrame? = lock.withLock {
-            while (frame == null && !closed) available.await()
-            if (closed) null else frame.also { frame = null }
+            while (frames.isEmpty() && !closed) available.await()
+            if (closed) null else frames.removeFirst()
         }
 
         fun close() = lock.withLock {
@@ -294,6 +327,15 @@ class CamServer(
         const val HANDSHAKE_TIMEOUT_MS = 15_000
         const val MAX_PENDING_CONNECTIONS = 4
 
+        /** About a quarter of a second of frames may queue up before they are dropped. */
+        fun backlogFor(fps: Int) = maxOf(2, fps / 4)
+
+        /** Picks the client's most preferred codec that [supported] contains; JPEG for old clients. */
+        fun negotiateCodec(body: JsonObject, supported: List<String>): String {
+            val wanted = (body["codecs"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+            return wanted?.firstOrNull { it in supported } ?: StreamConfig.CODEC_JPEG
+        }
+
         fun parseConfig(body: JsonObject, base: StreamConfig) = StreamConfig(
             width = body.int("width")?.coerceIn(160, 3840) ?: base.width,
             height = body.int("height")?.coerceIn(120, 2160) ?: base.height,
@@ -301,6 +343,7 @@ class CamServer(
             quality = body.int("quality")?.coerceIn(30, 100) ?: base.quality,
             camera = body.string("camera")?.takeIf { it == StreamConfig.CAMERA_BACK || it == StreamConfig.CAMERA_FRONT } ?: base.camera,
             torch = body.bool("torch") ?: base.torch,
+            codec = base.codec,
         )
 
         private fun sanitizeName(name: String?): String =

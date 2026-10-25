@@ -6,13 +6,19 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 import kotlin.concurrent.thread
 
-/** Produces synthetic JPEG frames (a moving bar) so the server can be tested without a camera. */
+/**
+ * Produces synthetic JPEG frames (a moving bar) so the server can be tested without a camera.
+ * When H.264 is negotiated in tests it still sends JPEG bytes; only the negotiation is checked.
+ */
 class FakeFrameSource : FrameSource {
     @Volatile var config: StreamConfig? = null
         private set
     @Volatile private var worker: Thread? = null
+    @Volatile var supportedCodecs = listOf(StreamConfig.CODEC_JPEG)
 
     override fun cameras() = listOf(StreamConfig.CAMERA_BACK, StreamConfig.CAMERA_FRONT)
+
+    override fun codecs() = supportedCodecs
 
     @Synchronized
     override fun start(config: StreamConfig, sink: FrameSink) {

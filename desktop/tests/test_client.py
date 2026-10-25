@@ -112,3 +112,37 @@ def test_stream_session_delivers_frames(store):
         assert got[0].size == (320, 240)
     finally:
         phone.close()
+
+
+@pytest.mark.parametrize("codecs", [("jpeg",), ("h264", "jpeg")])
+def test_session_uses_best_common_codec(store, codecs):
+    if "h264" in codecs and "libx264" not in getattr(pytest.importorskip("av"), "codecs_available", ()):
+        pytest.skip("no H.264 encoder for the mock phone")
+    phone = MockPhone(codecs=codecs)
+    try:
+        with PhoneConnection("127.0.0.1", phone.port) as conn:
+            phone.new_code()
+            device = conn.pair(store, phone.code)
+        got = []
+        done = threading.Event()
+
+        def on_preview(img):
+            got.append(img)
+            if len(got) >= 20:
+                done.set()
+
+        session = StreamSession(
+            store, Target(device=device), StreamSettings(width=320, height=240),
+            OutputOptions(width=640, height=360, mirror=False), SessionCallbacks(on_preview=on_preview),
+            virtual_camera=False, preview_interval=0,
+        )
+        session.start()
+        assert done.wait(10), "no frames received"
+        session.stop()
+        session.join(5)
+        assert phone.codec == codecs[0]
+        r, g, b = got[-1].getpixel((320, 180))
+        assert abs(r - 200) < 20 and abs(g - 80) < 20 and abs(b - 20) < 25, (r, g, b)
+        assert got[-1].size == (640, 360)
+    finally:
+        phone.close()

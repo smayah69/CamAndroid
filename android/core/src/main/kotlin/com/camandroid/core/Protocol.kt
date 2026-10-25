@@ -29,6 +29,7 @@ object Protocol {
     const val MAX_MESSAGE = 16 * 1024 * 1024
     const val FRAME_HEADER_SIZE = 12
     const val FLAG_FRONT_CAMERA = 0x1
+    const val FLAG_KEY_FRAME = 0x2 // decodable on its own (every JPEG frame, H.264 IDR frames)
 
     /** Crockford base32: no I, L, O or U, so codes are easy to read aloud and type. */
     const val CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -109,7 +110,7 @@ sealed class Message {
         val op: String? get() = body.string("op")
     }
 
-    class Frame(val timestampUs: Long, val rotation: Int, val flags: Int, val jpeg: ByteArray) : Message()
+    class Frame(val timestampUs: Long, val rotation: Int, val flags: Int, val data: ByteArray) : Message()
 }
 
 class ProtocolException(val code: String, message: String) : IOException(message)
@@ -166,13 +167,13 @@ class MessageWriter(output: OutputStream) {
     }
 
     @Synchronized
-    fun writeFrame(timestampUs: Long, rotation: Int, flags: Int, jpeg: ByteArray) {
+    fun writeFrame(timestampUs: Long, rotation: Int, flags: Int, payload: ByteArray) {
         data.writeByte(Protocol.MSG_FRAME)
-        data.writeInt(Protocol.FRAME_HEADER_SIZE + jpeg.size)
+        data.writeInt(Protocol.FRAME_HEADER_SIZE + payload.size)
         data.writeLong(timestampUs)
         data.writeShort(rotation)
         data.writeShort(flags)
-        data.write(jpeg)
+        data.write(payload)
         data.flush()
     }
 }

@@ -45,7 +45,7 @@ def test_framing_round_trip():
     pipe = Pipe(data)
     assert p.read_message(pipe) == {"op": "hello", "v": 1}
     frame = p.read_message(pipe)
-    assert (frame.timestamp_us, frame.rotation, frame.front_camera, frame.jpeg) == (123, 90, True, b"\xff\xd8jpeg")
+    assert (frame.timestamp_us, frame.rotation, frame.front_camera, frame.data) == (123, 90, True, b"\xff\xd8jpeg")
     with pytest.raises(ConnectionError):
         p.read_message(pipe)
 

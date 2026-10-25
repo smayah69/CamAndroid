@@ -22,6 +22,7 @@ MSG_FRAME = 2
 MAX_MESSAGE = 16 * 1024 * 1024
 FRAME_HEADER = struct.Struct(">qHH")  # timestamp_us, rotation, flags
 FLAG_FRONT_CAMERA = 0x1
+FLAG_KEY_FRAME = 0x2  # decodable on its own: every JPEG frame, H.264 IDR frames (with SPS/PPS)
 
 CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 CODE_LENGTH = 12
@@ -39,11 +40,15 @@ class Frame:
     timestamp_us: int
     rotation: int
     flags: int
-    jpeg: bytes
+    data: bytes  # one JPEG image or one H.264 access unit (Annex-B)
 
     @property
     def front_camera(self) -> bool:
         return bool(self.flags & FLAG_FRONT_CAMERA)
+
+    @property
+    def key_frame(self) -> bool:
+        return bool(self.flags & FLAG_KEY_FRAME)
 
 
 class _Stream(TypingProtocol):
@@ -134,7 +139,7 @@ def encode_control(body: dict) -> bytes:
 
 
 def encode_frame(frame: Frame) -> bytes:
-    payload = FRAME_HEADER.pack(frame.timestamp_us, frame.rotation, frame.flags) + frame.jpeg
+    payload = FRAME_HEADER.pack(frame.timestamp_us, frame.rotation, frame.flags) + frame.data
     return struct.pack(">BI", MSG_FRAME, len(payload)) + payload
 
 

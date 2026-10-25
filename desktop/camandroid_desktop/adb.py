@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from .protocol import DEFAULT_PORT
 from .resources import find_bundled
 
 LOCAL_USB_PORT = 47470
+
+log = logging.getLogger(__name__)
 
 
 class AdbError(Exception):
@@ -61,6 +65,35 @@ def device_states() -> dict[str, str]:
     return out
 
 
+@dataclass(frozen=True)
+class UsbPhone:
+    serial: str
+    state: str  # "device" when ready, "unauthorized", "offline", ...
+    model: str
+
+    @property
+    def ready(self) -> bool:
+        return self.state == "device"
+
+    @property
+    def wireless(self) -> bool:
+        """adb over Wi-Fi ("Wireless debugging") rather than a cable."""
+        return ":" in self.serial or "._adb-tls-connect." in self.serial
+
+
+def list_phones() -> list[UsbPhone]:
+    """Phones adb can see, with their model names (``adb devices -l``)."""
+    phones = []
+    for line in _run(["devices", "-l"]).splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        props = dict(p.split(":", 1) for p in parts[2:] if ":" in p)
+        model = props.get("model", "").replace("_", " ") or parts[0]
+        phones.append(UsbPhone(parts[0], parts[1], model))
+    return phones
+
+
 def devices() -> list[str]:
     """Serials of connected, authorized devices."""
     return [s for s, state in device_states().items() if state == "device"]
@@ -82,4 +115,5 @@ def forward(serial: str | None = None, local_port: int = LOCAL_USB_PORT, remote_
             raise AdbError(f"Several devices connected ({', '.join(found)}); choose one with --serial.")
         serial = found[0]
     _run(["-s", serial, "forward", f"tcp:{local_port}", f"tcp:{remote_port}"])
+    log.info("adb: forwarding localhost:%d to %s port %d", local_port, serial, remote_port)
     return local_port

@@ -4,19 +4,34 @@ import android.content.Context
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExtendableBuilder
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.UseCase
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.camandroid.core.FrameDecimator
+import com.camandroid.core.FrameRate
 import com.camandroid.core.FrameSink
 import com.camandroid.core.FrameSource
 import com.camandroid.core.Protocol
@@ -27,7 +42,10 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/** Captures frames with CameraX ImageAnalysis and encodes them as JPEG. */
+/**
+ * Captures frames with CameraX. H.264 goes camera -> hardware encoder through a surface, with no
+ * CPU copies; JPEG (for older desktop apps) goes through ImageAnalysis and a software encoder.
+ */
 class CameraXFrameSource(
     private val context: Context,
     private val owner: LifecycleOwner,
@@ -36,16 +54,19 @@ class CameraXFrameSource(
     private val mainExecutor = ContextCompat.getMainExecutor(context)
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val providerFuture = ProcessCameraProvider.getInstance(context)
+    private val h264Available by lazy { H264Encoder.isAvailable() }
 
     @Volatile private var config: StreamConfig? = null
     @Volatile private var sink: FrameSink? = null
     @Volatile private var frontFacing = false
     @Volatile private var deviceOrientation = 0
+    @Volatile private var sensorRotation = 0
+    @Volatile private var encoder: H264Encoder? = null
     private var camera: Camera? = null
     private var bound: StreamConfig? = null
 
     // Analyzer-thread state.
-    private var lastFrameNs = 0L
+    @Volatile private var decimator: FrameDecimator? = null
     private var nv21: ByteArray? = null
     private val jpeg = ByteArrayOutputStream(256 * 1024)
 
@@ -63,6 +84,9 @@ class CameraXFrameSource(
         }
     }
 
+    override fun codecs(): List<String> =
+        if (h264Available) listOf(StreamConfig.CODEC_H264, StreamConfig.CODEC_JPEG) else listOf(StreamConfig.CODEC_JPEG)
+
     override fun start(config: StreamConfig, sink: FrameSink) {
         this.sink = sink
         this.config = config
@@ -77,37 +101,41 @@ class CameraXFrameSource(
         onMain {
             val current = bound
             if (current == null || current.camera != config.camera || current.width != config.width ||
-                current.height != config.height
+                current.height != config.height || current.fps != config.fps || current.codec != config.codec
             ) {
                 bind(config)
             } else {
                 setTorch(config.torch)
+                if (current.quality != config.quality) encoder?.setBitrate(config.bitrate)
                 bound = config
             }
         }
     }
 
+    override fun requestKeyFrame() {
+        encoder?.requestKeyFrame()
+    }
+
     override fun stop() {
         config = null
         sink = null
-        onMain {
-            orientationListener.disable()
-            providerFuture.get().unbindAll()
-            camera = null
-            bound = null
-        }
+        onMain { unbind() }
     }
 
     fun release() {
         config = null
         sink = null
         onMain {
-            orientationListener.disable()
-            providerFuture.get().unbindAll()
-            camera = null
-            bound = null
+            unbind()
             analysisExecutor.shutdown()
         }
+    }
+
+    private fun unbind() {
+        orientationListener.disable()
+        providerFuture.get().unbindAll()
+        camera = null
+        bound = null
     }
 
     private fun onMain(block: () -> Unit) {
@@ -130,25 +158,81 @@ class CameraXFrameSource(
             provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
             else -> CameraSelector.DEFAULT_FRONT_CAMERA
         }
+        val facing = if (selector == CameraSelector.DEFAULT_FRONT_CAMERA) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+        val info = provider.availableCameraInfos.firstOrNull { it.lensFacing == facing }
+        val fpsRange = info?.let { pickFpsRange(it, c.fps) }
         val resolution = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(
+                if (c.width * 3 == c.height * 4) AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+                else AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY,
+            )
             .setResolutionStrategy(
                 ResolutionStrategy(Size(c.width, c.height), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER),
             )
             .build()
-        val analysis = ImageAnalysis.Builder()
-            .setResolutionSelector(resolution)
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-            // Rotation is computed per frame from the device orientation, so the server
-            // works the same with the screen off or the phone on a tripod.
-            .setTargetRotation(Surface.ROTATION_0)
-            .build()
-        analysis.setAnalyzer(analysisExecutor, ::analyze)
+        val useCase: UseCase = if (c.codec == StreamConfig.CODEC_H264) {
+            val builder = Preview.Builder()
+                .setResolutionSelector(resolution)
+                // Rotation is sent with every frame, computed from how the phone is held, so the
+                // stream works the same with the screen off or the phone on a tripod.
+                .setTargetRotation(Surface.ROTATION_0)
+            fpsRange?.let { setFpsRange(builder, it) }
+            builder.build().also { it.setSurfaceProvider(mainExecutor) { request -> provideEncoderSurface(request, c) } }
+        } else {
+            decimator = null
+            val builder = ImageAnalysis.Builder()
+                .setResolutionSelector(resolution)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .setTargetRotation(Surface.ROTATION_0)
+            fpsRange?.let { setFpsRange(builder, it) }
+            builder.build().also { it.setAnalyzer(analysisExecutor, ::analyze) }
+        }
         provider.unbindAll()
         frontFacing = selector == CameraSelector.DEFAULT_FRONT_CAMERA
-        camera = provider.bindToLifecycle(owner, selector, analysis)
+        camera = provider.bindToLifecycle(owner, selector, useCase)
         bound = c
         setTorch(c.torch)
+        Log.i(TAG, "Streaming ${c.codec} ${c.width}x${c.height}@${c.fps}, camera fps range $fpsRange")
+    }
+
+    /** Creates an encoder sized to what the camera will produce and hands its surface to CameraX. */
+    private fun provideEncoderSurface(request: SurfaceRequest, c: StreamConfig) {
+        val size = request.resolution
+        val enc = try {
+            H264Encoder(size.width, size.height, c.fps, c.bitrate, ::onEncodedFrame) { onError(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Cannot start H.264 encoder", e)
+            onError("Cannot start the video encoder: ${e.message}")
+            request.willNotProvideSurface()
+            return
+        }
+        Log.i(TAG, "Encoder ${enc.name} ${size.width}x${size.height} at ${c.bitrate / 1000} kbit/s")
+        request.setTransformationInfoListener(mainExecutor) { sensorRotation = it.rotationDegrees }
+        encoder = enc
+        request.provideSurface(enc.surface, mainExecutor) {
+            if (encoder === enc) encoder = null
+            enc.release()
+        }
+    }
+
+    private fun onEncodedFrame(data: ByteArray, keyFrame: Boolean, timestampUs: Long) {
+        val s = sink ?: return
+        val flags = frameFlags() or (if (keyFrame) Protocol.FLAG_KEY_FRAME else 0)
+        s.onFrame(data, frameRotation(sensorRotation), flags, timestampUs)
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun pickFpsRange(info: CameraInfo, fps: Int): Range<Int>? {
+        val ranges = Camera2CameraInfo.from(info)
+            .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ?.map { it.lower to it.upper } ?: return null
+        return FrameRate.pickRange(ranges, fps)?.let { Range(it.first, it.second) }
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun <T> setFpsRange(builder: ExtendableBuilder<T>, range: Range<Int>) {
+        Camera2Interop.Extender(builder).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
     }
 
     private fun setTorch(on: Boolean) {
@@ -156,13 +240,23 @@ class CameraXFrameSource(
         if (cam.cameraInfo.hasFlashUnit()) cam.cameraControl.enableTorch(on)
     }
 
+    private fun frameFlags() = if (frontFacing) Protocol.FLAG_FRONT_CAMERA else 0
+
+    /**
+     * Same formula as Camera2's JPEG_ORIENTATION: sensor rotation adjusted by how the device is
+     * held (mirrored for the front camera).
+     */
+    private fun frameRotation(sensor: Int): Int {
+        val held = if (frontFacing) (360 - deviceOrientation) % 360 else deviceOrientation
+        return (sensor + held) % 360
+    }
+
     private fun analyze(image: ImageProxy) {
         try {
             val c = config ?: return
             val s = sink ?: return
-            val now = System.nanoTime()
-            if (now - lastFrameNs < 1_000_000_000L / c.fps * 9 / 10) return
-            lastFrameNs = now
+            val d = decimator ?: FrameDecimator(c.fps).also { decimator = it }
+            if (!d.accept(System.nanoTime())) return
 
             val planes = image.planes
             val data = Yuv.toNv21(
@@ -176,14 +270,8 @@ class CameraXFrameSource(
             jpeg.reset()
             YuvImage(data, ImageFormat.NV21, image.width, image.height, null)
                 .compressToJpeg(Rect(0, 0, image.width, image.height), c.quality, jpeg)
-
-            // Same formula as Camera2's JPEG_ORIENTATION: sensor rotation adjusted by how the
-            // device is held (mirrored for the front camera).
-            val front = frontFacing
-            val held = if (front) (360 - deviceOrientation) % 360 else deviceOrientation
-            val rotation = (image.imageInfo.rotationDegrees + held) % 360
-            val flags = if (front) Protocol.FLAG_FRONT_CAMERA else 0
-            s.onFrame(jpeg.toByteArray(), rotation, flags, image.imageInfo.timestamp / 1000)
+            val flags = frameFlags() or Protocol.FLAG_KEY_FRAME
+            s.onFrame(jpeg.toByteArray(), frameRotation(image.imageInfo.rotationDegrees), flags, image.imageInfo.timestamp / 1000)
         } catch (e: Exception) {
             Log.w(TAG, "Dropping frame", e)
         } finally {

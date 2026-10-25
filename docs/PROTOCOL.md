@@ -33,10 +33,14 @@ Every message is `type (u8) | length (u32 BE) | payload`. The maximum length is 
 | type | payload |
 |------|---------|
 | 1    | UTF-8 JSON object (control message, field `op`) |
-| 2    | video frame: `timestamp_us (i64 BE) | rotation (u16 BE) | flags (u16 BE) | JPEG bytes` |
+| 2    | video frame: `timestamp_us (i64 BE) | rotation (u16 BE) | flags (u16 BE) | data` |
 
 `rotation` is the clockwise rotation (0/90/180/270) the client applies to show the image upright.
-Flag bit 0 means the frame comes from the front camera.
+Flags: bit 0 = front camera, bit 1 = key frame (decodable on its own).
+
+`data` is one JPEG image, or one H.264 access unit in Annex-B format (start codes, no B-frames).
+H.264 key frames are IDR frames preceded by their SPS and PPS, so a decoder can start at any key
+frame. Every JPEG frame is a key frame.
 
 ## Handshake
 
@@ -56,8 +60,10 @@ characters (60 bits), valid for 5 minutes and **for one attempt**. A wrong guess
 proof = HMAC-SHA256(key = code, "camandroid-pair-v1|" fp "|" server_nonce "|" client_nonce "|" client_id)
 C → S  {"op":"pair","client_nonce":"<32 hex>","proof":"<hex>"}
 S → C  {"op":"paired","token":"<64 hex>","proof": HMAC-SHA256(code, "camandroid-pair-ack-v1|" fp "|" sn "|" cn)}
-S → C  {"op":"auth_ok","cameras":["back","front"]}
+S → C  {"op":"auth_ok","cameras":["back","front"],"codecs":["h264","jpeg"]}
 ```
+
+`codecs` lists what the phone can encode, most preferred first (absent in older apps: JPEG only).
 
 The client verifies the ack proof before it stores the token, and it stores the token together with the pinned
 fingerprint.
@@ -80,15 +86,22 @@ Before it sends `auth`, the client checks that the presented fingerprint matches
 ## Streaming
 
 ```
-C → S  {"op":"start","width":1280,"height":720,"fps":30,"quality":80,"camera":"back","torch":false}
-S → C  {"op":"started",…}   then type-2 frames
+C → S  {"op":"start","width":1280,"height":720,"fps":60,"quality":80,"camera":"back","torch":false,
+        "codecs":["h264","jpeg"]}
+S → C  {"op":"started",…,"codec":"h264"}   then type-2 frames
 C → S  {"op":"update", any subset of the start fields}   → {"op":"updated",…}
 C → S  {"op":"stop"}                                     → {"op":"stopped"}
 C → S  {"op":"ping"}                                     → {"op":"pong"}
 ```
 
-The phone keeps only the newest frame when the network is slow, so a congested link drops frames
-instead of adding latency.
+The phone uses the first entry of the client's `codecs` that it supports, and JPEG when the client
+sends none (older desktop apps). `quality` (30-100) is the JPEG quality, or sets the H.264 bitrate
+(about 6 Mbit/s for 720p60 at 80). The camera runs at a fixed frame rate (for example [60, 60]) when
+it supports one, so it does not slow down in dim light.
+
+A congested link drops frames instead of adding latency: a key frame replaces every frame still
+queued, and when about a quarter of a second of H.264 frames is waiting, the phone drops them and
+asks its encoder for a new key frame.
 
 ## Security notes
 
@@ -103,5 +116,4 @@ instead of adding latency.
 | Token theft on the PC | `devices.json` is created with mode 0600 (POSIX). On Windows it lives in the user's `%APPDATA%`. |
 
 Known limitations: the pairing code is a short shared secret, not a PAKE, so the protection against
-an active attacker during pairing rests on the code's entropy and its short lifetime. Frames are MJPEG, not
-H.264, which uses more bandwidth in exchange for simplicity and low latency.
+an active attacker during pairing rests on the code's entropy and its short lifetime.

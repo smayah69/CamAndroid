@@ -144,7 +144,7 @@ private fun ServerCard(state: ServerState, onStart: () -> Unit, onStop: () -> Un
             addresses.forEach { Text("$it:${state.port}", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
             val s = state.streaming
             val status = when {
-                s != null -> "Streaming to ${state.client} · ${s.width}×${s.height} @ ${s.fps} fps · ${s.camera} camera"
+                s != null -> "Streaming to ${state.client} · ${s.width}×${s.height} @ ${s.fps} fps · ${s.codec.uppercase()} · ${s.camera} camera"
                 state.client != null -> "Connected to ${state.client}"
                 else -> "Waiting for a computer…"
             }

@@ -8,11 +8,17 @@ dynamic = ["version"]
 description = "Use your Android phone as a webcam: desktop companion for the CamAndroid app"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [{ name = "Omar Kharrat (@smayah69)" }]
 dependencies = [
+    "av>=14",  # FFmpeg H.264 decoder
     "numpy>=1.24",
     "Pillow>=10.0",
     "zeroconf>=0.131",
 ]
+
+[project.urls]
+Homepage = "https://github.com/smayah69/CamAndroid"
+Releases = "https://github.com/smayah69/CamAndroid/releases"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "cryptography>=42"]
