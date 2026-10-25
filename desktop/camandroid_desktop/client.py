@@ -162,6 +162,11 @@ class PhoneConnection:
         self.sock.settimeout(timeout)
 
     def close(self) -> None:
+        # shutdown() wakes a recv() blocked in another thread; close() alone does not on every OS.
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         try:
             self.sock.close()
         except OSError:

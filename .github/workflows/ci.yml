@@ -84,18 +84,8 @@ jobs:
             android/core/build/reports
 
   desktop:
-    name: Desktop (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: camandroid-linux-x86_64
-          - os: windows-latest
-            artifact: camandroid-windows-x86_64
-          - os: macos-latest
-            artifact: camandroid-macos-arm64
+    name: Desktop (Windows)
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: desktop
@@ -124,16 +114,12 @@ jobs:
       - name: Package
         run: |
           mkdir -p out
-          case "${{ runner.os }}" in
-            Windows) cp dist/camandroid.exe "out/${{ matrix.artifact }}.exe" ;;
-            macOS)   ditto -c -k --keepParent dist/CamAndroid.app "out/${{ matrix.artifact }}.zip" ;;
-            *)       cp dist/camandroid "out/${{ matrix.artifact }}" && chmod +x "out/${{ matrix.artifact }}" ;;
-          esac
+          cp dist/camandroid.exe out/camandroid-windows-x86_64.exe
           ls -l out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: camandroid-windows-x86_64
           path: desktop/out/*
           if-no-files-found: error
 
