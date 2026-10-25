@@ -24,7 +24,8 @@ Use your Android phone's camera as a webcam on your computer, over Wi-Fi or USB.
 
 ### 1. Install
 
-Download the newest release from the [Releases](../../releases) page. A new one is published
+Download the newest release from the [Releases](../../releases) page. Windows builds are signed
+through [SignPath Foundation](https://signpath.org) (see [Code signing policy](#code-signing-policy)). A new one is published
 automatically for every update:
 
 - **Phone:** `CamAndroid-<version>.apk`. Allow "install unknown apps" if prompted.

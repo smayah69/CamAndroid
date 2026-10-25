@@ -566,6 +566,8 @@ jobs:
             echo
             echo "APK signing certificate (SHA-256): \`$CERT\`"
             echo
+            echo "Windows code signing: free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org) ([policy](https://github.com/$GITHUB_REPOSITORY#code-signing-policy))."
+            echo
             if [ "$SIGNING" = temporary ]; then
               echo "> [!WARNING]"
               echo "> This APK is signed with a temporary key, because the \`ANDROID_KEYSTORE_PASSWORD\` secret is not set."
