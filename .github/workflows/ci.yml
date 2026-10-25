@@ -1,8 +1,10 @@
 name: CI
 
+# Every push to the default branch (and every v* tag) publishes a GitHub Release with the APK
+# and the Windows app. Other branches and pull requests only build and test.
 on:
   push:
-    branches: ["**"]
+    branches: ["**", "!dependabot/**"]  # Dependabot branches are covered by their pull_request runs
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -10,16 +12,59 @@ on:
 permissions:
   contents: read
 
+# Release runs share one queue so versions are published in order and never cancelled half-way.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ (startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && 'ci-release' || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ !(startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      code: ${{ steps.v.outputs.code }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          base="$(tr -d ' \r\n' < VERSION)"
+          release=false
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            release=true
+          elif [[ "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]; then
+            version="$base.$GITHUB_RUN_NUMBER"
+            release=true
+          else
+            version="$base.$GITHUB_RUN_NUMBER-dev"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::invalid version '$version' (VERSION must look like 0.3, tags like v1.2.3)"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "code=$GITHUB_RUN_NUMBER"  # Android versionCode: must only ever increase
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "CamAndroid $version (publish release: $release)" >> "$GITHUB_STEP_SUMMARY"
+
   android:
     name: Android app
+    needs: version
     runs-on: ubuntu-latest
+    outputs:
+      signing: ${{ steps.sign.outputs.mode }}
+      cert: ${{ steps.sign.outputs.cert }}
     env:
-      HAS_SIGNING_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      VERSION_NAME: ${{ needs.version.outputs.version }}
+      VERSION_CODE: ${{ needs.version.outputs.code }}
     defaults:
       run:
         working-directory: android
@@ -34,45 +79,93 @@ jobs:
       # Also validates the Gradle wrapper checksum.
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Set version
-        run: |
-          echo "VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          else
-            echo "VERSION_NAME=0.1.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-          fi
-
-      - name: Decode release signing key
-        if: env.HAS_SIGNING_KEY == 'true'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          echo "CAMANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-
+      # The release APK is built unsigned; it is signed in the next step with apksigner, so the
+      # signing key and its password are never exposed to Gradle or its plugins.
       - name: Test, lint and build
-        env:
-          CAMANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          CAMANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          CAMANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew --stacktrace :core:test :app:lintDebug :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
 
-      - name: Collect APKs
+      - name: Sign release APK
+        id: sign
+        env:
+          IS_RELEASE: ${{ needs.version.outputs.release }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Recommended: one secret, any long passphrase. CI then creates the signing key once and
+          # stores it in the repository encrypted with that passphrase (android/signing/release.p12).
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          # Optional: bring your own keystore instead.
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          mkdir -p "$RUNNER_TEMP/apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/apk/CamAndroid-${VERSION_NAME}-debug.apk"
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/apk/CamAndroid-${VERSION_NAME}.apk"
-          else
-            cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/apk/CamAndroid-${VERSION_NAME}-unsigned.apk"
+          set -euo pipefail
+          bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          ks="$RUNNER_TEMP/release.p12"
+          alias="${KEY_ALIAS:-camandroid}"
+          export KS_PASS="${KEYSTORE_PASSWORD:-}"
+          export KEY_PASS="${KEY_PASSWORD:-${KEYSTORE_PASSWORD:-}}"
+          mode=temporary
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$ks"
+            mode=custom
+          elif [ -n "$KS_PASS" ]; then
+            # Read the key from the newest default-branch commit, so a key stored by an earlier run
+            # is reused even when this run builds an older commit.
+            git fetch --quiet --depth=1 origin "$DEFAULT_BRANCH"
+            if git cat-file -e FETCH_HEAD:android/signing/release.p12 2>/dev/null; then
+              git show FETCH_HEAD:android/signing/release.p12 > "$ks"
+              mode=permanent
+            elif [ "$IS_RELEASE" = true ]; then
+              keytool -genkeypair -noprompt -keystore "$ks" -storetype PKCS12 -storepass:env KS_PASS \
+                -alias "$alias" -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=CamAndroid" \
+                -J-Dkeystore.pkcs12.keyPbeIterationCount=600000 -J-Dkeystore.pkcs12.macIterationCount=600000
+              mkdir -p "$RUNNER_TEMP/new-keystore"
+              cp "$ks" "$RUNNER_TEMP/new-keystore/release.p12"
+              mode=generated
+            fi
           fi
-          ls -l "$RUNNER_TEMP/apk"
+          if [ "$mode" = temporary ]; then
+            # Throwaway key: the APK installs, but a later APK signed with another key cannot
+            # update it. Set ANDROID_KEYSTORE_PASSWORD to get a permanent key.
+            KS_PASS="$(openssl rand -hex 24)"
+            export KS_PASS
+            export KEY_PASS="$KS_PASS"
+            alias=temporary
+            keytool -genkeypair -noprompt -keystore "$ks" -storetype PKCS12 -storepass:env KS_PASS \
+              -alias "$alias" -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=CamAndroid temporary"
+            echo "::warning::APK signed with a temporary key. Add the ANDROID_KEYSTORE_PASSWORD secret so updates install over each other (README > Signing)."
+          fi
+          out="$RUNNER_TEMP/apk"
+          mkdir -p "$out"
+          "$bt/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/aligned.apk"
+          "$bt/apksigner" sign --ks "$ks" --ks-type PKCS12 --ks-key-alias "$alias" \
+            --ks-pass env:KS_PASS --key-pass env:KEY_PASS \
+            --out "$out/CamAndroid-$VERSION_NAME.apk" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$ks"
+          "$bt/apksigner" verify --print-certs "$out/CamAndroid-$VERSION_NAME.apk" | tee "$RUNNER_TEMP/certs.txt"
+          cert="$(grep -m1 'certificate SHA-256 digest' "$RUNNER_TEMP/certs.txt" | awk '{print $NF}')"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "cert=$cert" >> "$GITHUB_OUTPUT"
+          echo "APK signing: $mode, certificate SHA-256 $cert" >> "$GITHUB_STEP_SUMMARY"
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/CamAndroid-$VERSION_NAME-debug.apk"
 
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: ${{ runner.temp }}/apk/*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: ${{ runner.temp }}/CamAndroid-*-debug.apk
+
+      # Encrypted with ANDROID_KEYSTORE_PASSWORD; the release job commits it to the repository.
+      - uses: actions/upload-artifact@v4
+        if: steps.sign.outputs.mode == 'generated'
+        with:
+          name: new-signing-keystore
+          path: ${{ runner.temp }}/new-keystore/release.p12
+          retention-days: 1
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -160,18 +253,21 @@ jobs:
 
   desktop:
     name: Windows app (exe + installer)
-    needs: vcam
+    needs: [version, vcam]
     runs-on: windows-latest
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.version }}
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set version
+      - name: Stamp version
         run: |
-          if ("$env:GITHUB_REF" -like "refs/tags/v*") { $v = "$env:GITHUB_REF_NAME".Substring(1) } else { $v = "0.2.0-dev.$env:GITHUB_RUN_NUMBER" }
-          "VERSION_NAME=$v" >> $env:GITHUB_ENV
+          $f = "desktop/camandroid_desktop/__init__.py"
+          (Get-Content $f) -replace '^__version__ = ".*"$', "__version__ = `"$env:VERSION_NAME`"" | Set-Content $f
+          Select-String '__version__' $f
 
       - uses: actions/download-artifact@v4
         with:
@@ -306,27 +402,98 @@ jobs:
         run: cat "$RUNNER_TEMP/phone.log"
 
   release:
-    name: GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, vcam, desktop, interop]
+    name: Publish release
+    needs: [version, android, vcam, desktop, interop]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+      SIGNING: ${{ needs.android.outputs.signing }}
+      CERT: ${{ needs.android.outputs.cert }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # history and tags for the change list
+
       - uses: actions/download-artifact@v4
         with:
           name: android-apk
           path: dist
+
       - uses: actions/download-artifact@v4
         with:
           name: camandroid-windows
           path: dist
-      - name: Checksums
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+
+      - uses: actions/download-artifact@v4
+        if: needs.android.outputs.signing == 'generated'
         with:
-          files: dist/*
-          generate_release_notes: true
+          name: new-signing-keystore
+          path: new-keystore
+
+      - name: Store the new signing key in the repository
+        if: needs.android.outputs.signing == 'generated'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -B add-signing-key "origin/$DEFAULT_BRANCH"
+          mkdir -p android/signing
+          cp new-keystore/release.p12 android/signing/release.p12
+          git add android/signing/release.p12
+          git commit -m "Add APK signing key, encrypted with the ANDROID_KEYSTORE_PASSWORD secret"
+          git push origin "HEAD:$DEFAULT_BRANCH"
+          git checkout --quiet --detach "$GITHUB_SHA"
+
+      - name: Write checksums and release notes
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          prev="$(gh release list --limit 30 --json tagName,isDraft \
+            --jq "[.[] | select((.isDraft | not) and .tagName != \"$TAG\")][0].tagName // \"\"")"
+          if [ -n "$prev" ] && git merge-base --is-ancestor "$prev" "$GITHUB_SHA" 2>/dev/null; then
+            changes="$(git log --no-merges --pretty='- %s (%h)' "$prev..$GITHUB_SHA" | head -50)"
+          else
+            changes="$(git log --no-merges --pretty='- %s (%h)' -20 "$GITHUB_SHA")"
+          fi
+          {
+            echo "## Downloads"
+            echo
+            echo "| File | What it is |"
+            echo "|---|---|"
+            echo "| \`CamAndroid-$VERSION.apk\` | Android app. Install it, or install it over the previous version to update. |"
+            echo "| \`CamAndroid-Setup-$VERSION.exe\` | Windows installer: app, **CamAndroid** camera and USB tools. Run it again to update. |"
+            echo "| \`CamAndroid-$VERSION-portable.exe\` | Windows app without installation (no admin rights needed). |"
+            echo "| \`SHA256SUMS.txt\` | SHA-256 checksums of the files above. |"
+            echo
+            echo "APK signing certificate (SHA-256): \`$CERT\`"
+            echo
+            if [ "$SIGNING" = temporary ]; then
+              echo "> [!WARNING]"
+              echo "> This APK is signed with a temporary key, because the \`ANDROID_KEYSTORE_PASSWORD\` secret is not set."
+              echo "> It installs normally, but Android won't install a later version over it until a permanent key is used."
+              echo "> See *Signing* in the README; after that you uninstall this build once."
+              echo
+            fi
+            if [ -n "$prev" ]; then echo "## Changes since $prev"; else echo "## Changes"; fi
+            echo
+            echo "$changes"
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "CamAndroid $VERSION" --notes-file notes.md
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "CamAndroid $VERSION" \
+              --notes-file notes.md --latest
+          fi
+          echo "Published $(gh release view "$TAG" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"

@@ -6,7 +6,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Release signing comes from the environment (GitHub Actions secrets); see README "CI/CD".
+// Optional local release signing. CI builds the release APK unsigned and signs it with apksigner
+// (see the "Sign release APK" step in .github/workflows/ci.yml and README > Signing).
 val keystoreFile = providers.environmentVariable("CAMANDROID_KEYSTORE_FILE").orNull
 val hasReleaseKey = keystoreFile != null && file(keystoreFile).exists()
 
@@ -19,7 +20,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = providers.environmentVariable("VERSION_CODE").orNull?.toInt() ?: 1
-        versionName = providers.environmentVariable("VERSION_NAME").orNull ?: "0.1.0"
+        versionName = providers.environmentVariable("VERSION_NAME").orNull ?: "0.3.0"
     }
 
     signingConfigs {
