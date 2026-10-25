@@ -148,19 +148,19 @@ jobs:
           echo "APK signing: $mode, certificate SHA-256 $cert" >> "$GITHUB_STEP_SUMMARY"
           cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/CamAndroid-$VERSION_NAME-debug.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-apk
           path: ${{ runner.temp }}/apk/*.apk
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-debug-apk
           path: ${{ runner.temp }}/CamAndroid-*-debug.apk
 
       # Encrypted with ANDROID_KEYSTORE_PASSWORD; the release job commits it to the repository.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.sign.outputs.mode == 'generated'
         with:
           name: new-signing-keystore
@@ -168,7 +168,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: android-reports
@@ -243,7 +243,7 @@ jobs:
           CAMANDROID_VCAMTEST: ${{ github.workspace }}\windows\vcam\dist\vcamtest64.exe
         run: python -m pytest tests/test_vcam.py -v -s
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vcam-build
           path: |
@@ -362,7 +362,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw "camera still registered after uninstall" }
           exit 0
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: camandroid-windows
           path: desktop/out/*.exe
