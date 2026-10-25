@@ -102,7 +102,7 @@ class StreamSession(threading.Thread):
         self.cb = callbacks or SessionCallbacks()
         self.use_vcam, self.backend, self.vcam_device = virtual_camera, backend, device
         self.preview_interval = preview_interval
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._conn: PhoneConnection | None = None
         self._pending: queue.Queue[dict] = queue.Queue()
         self.frames = 0
@@ -111,7 +111,7 @@ class StreamSession(threading.Thread):
     # -- control from other threads ----------------------------------------------------------
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
         conn = self._conn
         if conn:
             conn.close()
@@ -134,7 +134,7 @@ class StreamSession(threading.Thread):
                                      self.backend, self.vcam_device)
                 self.cb.on_status(f"Virtual camera ready: {vcam.device}")
             backoff = 1.0
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 try:
                     self._stream_once(vcam)
                     backoff = 1.0
@@ -157,10 +157,10 @@ class StreamSession(threading.Thread):
                 except adb.AdbError as e:
                     self.cb.on_status(f"USB: {e}")
                 except (OSError, ssl.SSLError, ConnectionError, protocol.ProtocolError) as e:
-                    if self._stop.is_set():
+                    if self._stop_event.is_set():
                         break
                     self.cb.on_status(f"Connection lost ({e.__class__.__name__}); reconnecting in {backoff:.0f}s…")
-                if self._stop.wait(backoff):
+                if self._stop_event.wait(backoff):
                     break
                 backoff = min(backoff * 2, 10.0)
         except Exception as e:  # noqa: BLE001 - surface anything unexpected to the user
@@ -174,7 +174,7 @@ class StreamSession(threading.Thread):
         conn = connect(self.store, self.target)
         self._conn = conn
         try:
-            if self._stop.is_set():
+            if self._stop_event.is_set():
                 return
             device = conn.authenticate(self.store, self.target.device)
             if not self.target.usb:
@@ -184,7 +184,7 @@ class StreamSession(threading.Thread):
             self.cb.on_status(f"Connected to {device.name}, waiting for video…")
             last_preview = 0.0
             window_start, window_frames = time.monotonic(), 0
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 self._flush_pending(conn)
                 msg = conn.read()
                 if not isinstance(msg, protocol.Frame):
