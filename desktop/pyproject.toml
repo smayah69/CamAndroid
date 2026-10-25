@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "camandroid-desktop"
+dynamic = ["version"]
+description = "Use your Android phone as a webcam: desktop companion for the CamAndroid app"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "pyvirtualcam>=0.12",
+    "zeroconf>=0.131",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "cryptography>=42"]
+build = ["pyinstaller>=6.10"]
+
+[project.scripts]
+camandroid = "camandroid_desktop.cli:main"
+
+[tool.setuptools]
+packages = ["camandroid_desktop"]
+
+[tool.setuptools.dynamic]
+version = { attr = "camandroid_desktop.__version__" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = ["S101", "S603", "S311", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
