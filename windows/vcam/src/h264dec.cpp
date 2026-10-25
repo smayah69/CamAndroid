@@ -13,6 +13,7 @@
 #define _WIN32_WINNT 0x0A00
 #endif
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX  // windows.h min/max macros break std::min/std::max
 #include <windows.h>
 #include <mfapi.h>
 #include <mferror.h>
