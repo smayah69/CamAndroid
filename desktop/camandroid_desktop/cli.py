@@ -8,6 +8,7 @@ import sys
 import time
 
 from . import __version__, adb, protocol
+from .camera_install import CameraInstallError
 from .client import CamAndroidError, PhoneConnection, StreamSettings
 from .session import SessionCallbacks, StreamSession, Target, connect
 from .store import DeviceStore
@@ -114,7 +115,7 @@ def cmd_stream(args, store: DeviceStore) -> int:
     session = StreamSession(
         store, target, settings, output,
         SessionCallbacks(on_status=lambda s: print(s, flush=True), on_error=errors.append),
-        virtual_camera=not args.no_vcam, backend=args.backend, device=args.device,
+        virtual_camera=not args.no_vcam,
     )
     print(f"Connecting to {target.describe()} … (Ctrl+C to stop)")
     session.start()
@@ -128,6 +129,25 @@ def cmd_stream(args, store: DeviceStore) -> int:
     for e in errors:
         print(f"Error: {e}", file=sys.stderr)
     return 1 if errors else 0
+
+
+def cmd_camera(args, store: DeviceStore) -> int:
+    from . import camera_install as ci
+
+    if args.action == "install":
+        print(ci.install_user().describe())
+    elif args.action == "install-all-users":
+        ci.install_machine()
+        print("Approve the administrator prompt(s); then run 'camandroid camera status'.")
+    elif args.action == "uninstall":
+        print(ci.uninstall_user().describe())
+    else:
+        st = ci.status()
+        print(st.describe())
+        for arch, path in (("64-bit", st.x64), ("32-bit", st.x86)):
+            if path:
+                print(f"  {arch}: {path}")
+    return 0
 
 
 def cmd_probe(args, store: DeviceStore) -> int:
@@ -178,10 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0, help="extra clockwise rotation")
     p.add_argument("--mirror", action="store_true")
     p.add_argument("--fill", action="store_true", help="crop to fill the frame instead of letterboxing")
-    p.add_argument("--backend", help="pyvirtualcam backend (obs, unitycapture, v4l2loopback, ...)")
-    p.add_argument("--device", help="virtual camera device, e.g. /dev/video10")
     p.add_argument("--no-vcam", action="store_true", help="receive and decode only (testing)")
     p.set_defaults(func=cmd_stream)
+
+    p = sub.add_parser("camera", help="install, remove or check the CamAndroid virtual camera")
+    p.add_argument("action", choices=["status", "install", "install-all-users", "uninstall"])
+    p.set_defaults(func=cmd_camera)
 
     p = sub.add_parser("probe", help="show TLS details and pairing status of a phone")
     p.add_argument("target")
@@ -202,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     store = DeviceStore()
     try:
         return args.func(args, store)
-    except (CamAndroidError, adb.AdbError, OSError) as e:
+    except (CamAndroidError, adb.AdbError, OSError, CameraInstallError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 

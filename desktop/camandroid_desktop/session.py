@@ -93,14 +93,12 @@ class StreamSession(threading.Thread):
         output: OutputOptions,
         callbacks: SessionCallbacks | None = None,
         virtual_camera: bool = True,
-        backend: str | None = None,
-        device: str | None = None,
         preview_interval: float = 0.1,
     ):
         super().__init__(name="camandroid-session", daemon=True)
         self.store, self.target, self.settings, self.output = store, target, settings, output
         self.cb = callbacks or SessionCallbacks()
-        self.use_vcam, self.backend, self.vcam_device = virtual_camera, backend, device
+        self.use_vcam = virtual_camera
         self.preview_interval = preview_interval
         self._stop_event = threading.Event()
         self._conn: PhoneConnection | None = None
@@ -130,9 +128,8 @@ class StreamSession(threading.Thread):
             if self.use_vcam:
                 from .vcam import VirtualCamera
 
-                vcam = VirtualCamera(self.output.width, self.output.height, self.settings.fps,
-                                     self.backend, self.vcam_device)
-                self.cb.on_status(f"Virtual camera ready: {vcam.device}")
+                vcam = VirtualCamera(self.output.width, self.output.height, self.settings.fps)
+                self.cb.on_status("Virtual camera 'CamAndroid' ready")
             backoff = 1.0
             while not self._stop_event.is_set():
                 try:

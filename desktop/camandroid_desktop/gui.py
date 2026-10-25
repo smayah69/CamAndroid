@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
@@ -36,7 +37,9 @@ class App:
         self._build()
         self._start_discovery()
         self.refresh_devices()
+        self.refresh_camera_status()
         root.after(50, self._pump)
+        root.after(300, self._offer_camera_install)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # -- layout ------------------------------------------------------------------------------
@@ -86,6 +89,11 @@ class App:
         self.torch = tk.BooleanVar(value=False)
 
         row = 0
+        self.camera_status = tk.StringVar(value="")
+        ttk.Label(right, textvariable=self.camera_status).grid(row=row, column=0, sticky="w", **pad)
+        self.camera_btn = ttk.Button(right, text="Install camera", command=self.install_camera)
+        self.camera_btn.grid(row=row, column=1, sticky="e", **pad)
+        row += 1
         ttk.Label(right, text="Resolution").grid(row=row, column=0, sticky="w", **pad)
         self.res_box = ttk.Combobox(right, textvariable=self.resolution, values=RESOLUTIONS, state="readonly", width=12)
         self.res_box.grid(row=row, column=1, sticky="w", **pad)
@@ -222,11 +230,49 @@ class App:
 
     # -- streaming ---------------------------------------------------------------------------
 
+    # -- virtual camera ----------------------------------------------------------------------
+
+    def refresh_camera_status(self) -> None:
+        from . import camera_install
+
+        st = camera_install.status()
+        self.camera_status.set("Camera 'CamAndroid': installed" if st.installed else "Camera: not installed")
+        self.camera_btn.config(text="Reinstall camera" if st.installed else "Install camera")
+
+    def _offer_camera_install(self) -> None:
+        from . import camera_install
+
+        if sys.platform == "win32" and not camera_install.status().installed:
+            if messagebox.askyesno(
+                "CamAndroid",
+                "Install the 'CamAndroid' webcam so Zoom, Teams, Meet, Discord and other apps can use "
+                "your phone?\n\nNo administrator rights or extra software are needed.",
+            ):
+                self.install_camera()
+
+    def install_camera(self) -> None:
+        from . import camera_install
+
+        try:
+            st = camera_install.install_user()
+            self.status.set(st.describe())
+            messagebox.showinfo("CamAndroid", "Camera installed. Restart your video app if it is already open, "
+                                              "then choose 'CamAndroid' as the camera.")
+        except camera_install.CameraInstallError as e:
+            messagebox.showerror("CamAndroid", f"Could not install the camera: {e}")
+        self.refresh_camera_status()
+
     def toggle_stream(self) -> None:
         if self.session:
             self.session.stop()
             self.start_btn.config(state="disabled")
             return
+        from . import camera_install
+
+        if sys.platform == "win32" and not camera_install.status().installed:
+            self.install_camera()
+            if not camera_install.status().installed:
+                return
         if self.usb.get():
             target = Target(usb=True)
             # Over USB the phone is identified by its certificate after connecting.
