@@ -1,0 +1,50 @@
+# Uploads an already published release APK and its version.json to bombo.cu.ma, without
+# rebuilding. Every new release does this on its own (CI > Publish release); run this by hand
+# after setting up the FTP_PASSWORD secret, or to re-upload.
+name: Publish APK to bombo.cu.ma
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload, e.g. v0.3.47 (empty = latest release)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-release  # never races a release that is being published
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_INPUT: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the release APK
+        run: |
+          set -euo pipefail
+          tag=${TAG_INPUT:-$(gh release view --json tagName --jq .tagName)}
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          gh release download "$tag" --pattern "CamAndroid-*.apk" --dir dist
+          ls -l dist
+
+      - name: Upload to bombo.cu.ma
+        env:
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_HOST: ${{ vars.FTP_HOST }}
+          FTP_USER: ${{ vars.FTP_USER }}
+          FTP_DIR: ${{ vars.FTP_DIR }}
+          FTP_ALLOW_PLAIN: ${{ vars.FTP_ALLOW_PLAIN }}
+          PUBLIC_URL: ${{ vars.APK_PUBLIC_URL }}
+        run: |
+          if [ -z "$FTP_PASSWORD" ]; then
+            echo "::error::Add the FTP_PASSWORD secret first (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          apk=$(ls dist/CamAndroid-*.apk | grep -v -- '-debug.apk$' | head -1)
+          scripts/publish-apk-ftp.sh "$apk" "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

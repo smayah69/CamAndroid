@@ -518,3 +518,13 @@ jobs:
               --notes-file notes.md --latest
           fi
           echo "Published $(gh release view "$TAG" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the APK to bombo.cu.ma (for the app's update checker)
+        env:
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_HOST: ${{ vars.FTP_HOST }}
+          FTP_USER: ${{ vars.FTP_USER }}
+          FTP_DIR: ${{ vars.FTP_DIR }}
+          FTP_ALLOW_PLAIN: ${{ vars.FTP_ALLOW_PLAIN }}
+          PUBLIC_URL: ${{ vars.APK_PUBLIC_URL }}
+        run: scripts/publish-apk-ftp.sh "dist/CamAndroid-$VERSION.apk" "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
