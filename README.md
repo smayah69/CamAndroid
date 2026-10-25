@@ -24,7 +24,8 @@ Use your Android phone's camera as a webcam on your computer, over Wi-Fi or USB.
 
 ### 1. Install
 
-Download from the [Releases](../../releases) page (or from the artifacts of any CI run):
+Download the newest release from the [Releases](../../releases) page. A new one is published
+automatically for every update:
 
 - **Phone:** `CamAndroid-<version>.apk`. Allow "install unknown apps" if prompted.
 - **PC:** `CamAndroid-Setup-<version>.exe`. This installs the app, the **CamAndroid** camera for all
@@ -117,17 +118,28 @@ the JVM. The Android app module adds only the UI, the camera and the system inte
 
 ## CI/CD
 
-Every push and pull request runs:
+**Every push to the default branch publishes a new release** on the Releases page, versioned
+`v<VERSION>.<build number>` (for example `v0.3.42`), with:
+
+- `CamAndroid-<version>.apk`: the Android app
+- `CamAndroid-Setup-<version>.exe`: the Windows installer
+- `CamAndroid-<version>-portable.exe`: Windows, no installation
+- `SHA256SUMS.txt`, plus the change list and the APK signing-certificate fingerprint in the notes
+
+To update, install the new APK over the old one on the phone, and run the new installer on the PC.
+Pushing a tag such as `v1.0.0` publishes that exact version. *Actions → CI → Run workflow* rebuilds
+and republishes the current default branch. Edit `VERSION` to change the major/minor number.
+
+Every run, including pull requests and other branches, also runs these jobs:
 
 | Job | What it does |
 |---|---|
-| Android app | Core unit tests, Android lint, unit tests, debug and release APK builds (uploaded as artifacts) |
+| Version | Works out the version number and whether this run publishes a release |
+| Android app | Core unit tests, Android lint, unit tests, debug and release builds. The release APK is signed with `apksigner` outside Gradle, so build plugins never see the key |
 | Virtual camera | Builds the 64- and 32-bit camera DLLs, registers them, and captures through real DirectShow graphs: placeholder, 640×480 to 1080p, orientation, 32-bit, the Python writer end to end, and OpenCV as an independent client |
 | Windows app | ruff and pytest, signs the DLLs and exe if configured, builds `camandroid.exe` and the installer, and checks that a silent install and uninstall registers and removes the camera |
 | Interop | Starts the Kotlin server with a fake camera and runs the Python client against it |
-| Release | On a `v*` tag, publishes a GitHub Release with the APK, the installer, the portable exe and SHA256SUMS |
-
-To cut a release: `git tag v0.1.0 && git push origin v0.1.0`.
+| Publish release | Only on the default branch and `v*` tags: uploads the files above as a GitHub Release |
 
 ## Signing
 
@@ -150,18 +162,25 @@ A self-signed certificate doesn't help other people. It is only trusted on machi
 
 ### Android
 
-Without signing secrets, CI produces a signed **debug** APK, which you can install, and an **unsigned** release
-APK. To get a signed release APK, create a keystore once:
+Android installs an update over an existing app only if both APKs are signed with **the same key**.
+To get that, add **one repository secret**. You can do it from a phone browser:
 
-```
-keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 -validity 10000 -alias camandroid
-# PowerShell: copy the keystore as base64 to the clipboard
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks")) | Set-Clipboard
-```
+1. Repository → *Settings → Secrets and variables → Actions → New repository secret*
+2. Name: `ANDROID_KEYSTORE_PASSWORD`. Value: a long passphrase you keep somewhere safe (20+ random
+   characters, or 5+ random words). Don't share it with anyone.
+3. *Actions → CI → Run workflow* (or push any change).
 
-Then add these repository secrets (*Settings → Secrets and variables → Actions*):
-`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-Keep `release.jks` backed up somewhere safe: updates must be signed with the same key.
+On that run, CI creates a 4096-bit RSA signing key, signs the release with it and commits it to
+`android/signing/release.p12`, encrypted with your passphrase (AES-256, PBKDF2 with 600,000
+iterations). The passphrase is never stored in the repository. Every later release reuses the key,
+and the certificate fingerprint is printed in each release's notes.
+
+Until the secret is set, each APK is signed with a throwaway key and its release notes say so. It
+installs fine, but you have to uninstall it once before installing the first permanently signed version.
+
+To use your own keystore instead, set `ANDROID_KEYSTORE_BASE64` (the keystore, base64-encoded),
+`ANDROID_KEYSTORE_PASSWORD`, and optionally `ANDROID_KEY_ALIAS` (default `camandroid`) and
+`ANDROID_KEY_PASSWORD`.
 
 ## Troubleshooting
 
