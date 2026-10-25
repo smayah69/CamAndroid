@@ -4,56 +4,68 @@ Use your Android phone's camera as a webcam on your computer, over Wi-Fi or USB.
 
 - **Android app** (`android/`): Kotlin, Jetpack Compose, CameraX. Runs a TLS server in a foreground
   service, so it keeps streaming with the screen off.
-- **Windows desktop app** (`desktop/`): Python, packaged as a single `camandroid.exe`. Has a GUI and a CLI,
-  and outputs to a virtual webcam that Zoom, Teams, Meet, OBS and other apps can select.
-- **CI/CD** (`.github/workflows/ci.yml`): builds and tests both apps, runs the Python client against the
-  real Kotlin server, and publishes a GitHub Release when you push a `v*` tag.
+- **Windows desktop app** (`desktop/`): Python, packaged as `camandroid.exe`, with a GUI and a CLI.
+- **CamAndroid virtual camera** (`windows/vcam/`): our own C++ DirectShow camera DLL (64- and 32-bit).
+  It shows up as **CamAndroid** in Zoom, Teams, Google Meet/Chrome/Edge, Discord, Skype and OBS.
+  OBS is not needed.
+- **CI/CD** (`.github/workflows/ci.yml`): builds and tests everything, tests the camera with real
+  DirectShow clients on Windows, builds the installer, and publishes a GitHub Release when you push a
+  `v*` tag.
 
 ```
- Phone (CamAndroid app)                         Windows PC (camandroid.exe)
- CameraX → JPEG ─┐                            ┌─→ decode/rotate/scale → virtual webcam
-                 └── TLS :4747 (Wi-Fi / USB) ─┘    (OBS Virtual Camera driver)
+ Phone (CamAndroid app)                       Windows PC
+ CameraX → JPEG ─┐                          ┌─ camandroid.exe ── shared memory ──┐
+                 └─ TLS :4747 ──────────────┘   decode/rotate/scale             │
+                    Wi-Fi, or USB via the                                        ▼
+                    bundled adb             Zoom / Teams / Chrome ◄─ CamAndroid camera DLL
 ```
 
 ## Quick start
 
-### 1. Install the virtual camera driver (one time)
-
-Install [OBS Studio](https://obsproject.com/). It includes the *OBS Virtual Camera* driver that
-camandroid writes to. You don't need to keep OBS running.
-
-### 2. Install the apps
+### 1. Install
 
 Download from the [Releases](../../releases) page (or from the artifacts of any CI run):
 
-- `CamAndroid-<version>.apk`: install it on the phone. Allow "install unknown apps" if prompted.
-- `camandroid-windows-x86_64.exe`: run it on the PC. It is unsigned, so SmartScreen may warn you;
-  choose *More info → Run anyway*. Allow it through Windows Firewall on **private** networks when asked.
+- **Phone:** `CamAndroid-<version>.apk`. Allow "install unknown apps" if prompted.
+- **PC:** `CamAndroid-Setup-<version>.exe`. This installs the app, the **CamAndroid** camera for all
+  users and the USB tools (adb), and allows phone discovery on private networks. Nothing else is needed.
 
-The desktop app can also be installed from source with Python 3.10+: `pip install ./desktop` and then run `camandroid`.
+There is also `CamAndroid-<version>-portable.exe`, which needs no installer and no admin rights. On
+first start it offers to install the camera for your Windows user only.
 
-### 3. Pair (one time)
+If you haven't added a code-signing certificate (see [Signing](#signing)), Windows SmartScreen will
+warn about an unknown publisher. Choose *More info → Run anyway*.
+
+### 2. Pair (one time)
 
 1. On the phone, open **CamAndroid**, tap **Start** and allow camera access.
 2. Tap **Pair new computer**. A code like `K7QM-4X2P-9RTD` appears.
-3. On the computer, open **camandroid**, select the phone (it is found automatically on the same Wi-Fi
-   network), click **Pair…** and type the code.
+3. On the PC, open **CamAndroid**, select the phone (it is found automatically on the same Wi-Fi), click
+   **Pair…** and type the code.
 
-If discovery is blocked (guest Wi-Fi, firewall), use **Pair by address…** with the IP shown in the app.
+If discovery is blocked (guest Wi-Fi, client isolation), use **Pair by address…** with the IP shown in the app.
 
-### 4. Stream
+### 3. Stream
 
-Select the phone and click **Start webcam**. In your video app, pick **OBS Virtual Camera**.
+Select the phone and click **Start webcam**. In Zoom, Teams, Meet or any other video app, choose
+**CamAndroid** as the camera. While the phone isn't sending, the camera shows a "Waiting for the
+phone…" picture, so apps never see a broken device.
 
 You can change the camera, flashlight, quality, rotation, mirroring and crop-to-fill while streaming.
 To change resolution or frame rate, stop the webcam first.
 
-### USB instead of Wi-Fi
+### USB
 
-USB gives lower latency and no Wi-Fi congestion. Enable *Developer options → USB debugging* on the
-phone, install [platform-tools](https://developer.android.com/tools/releases/platform-tools) (`adb`)
-on the PC, plug in the cable and tick **Connect over USB**. The desktop app runs
-`adb forward` for you. Pairing works the same way over USB.
+USB has lower latency and doesn't depend on Wi-Fi. `adb` comes with CamAndroid, so you don't need to install
+anything on the PC.
+
+1. On the phone, enable *Developer options* (tap *Settings → About phone → Build number* 7 times),
+   then turn on *USB debugging*.
+2. Plug in the cable and accept *Allow USB debugging?* on the phone (tick *Always allow*).
+3. In the PC app, tick **Connect over USB**, then pair or start as usual.
+
+Most phones work with Windows' built-in USB driver. If `adb` can't see a Samsung, Xiaomi or other
+brand phone, install that manufacturer's USB driver once.
 
 ## CLI
 
@@ -67,6 +79,8 @@ camandroid stream                # stream the only paired phone to the virtual w
 camandroid stream --usb --size 1920x1080 --fps 30 --camera front --mirror
 camandroid probe 192.168.1.20    # TLS version, cipher, certificate fingerprint
 camandroid forget "Pixel 8"
+camandroid camera status         # is the CamAndroid camera installed?
+camandroid camera install        # install it for this Windows user (no admin)
 ```
 
 The packaged `.exe` is a windowed app, so CLI output is only visible when installed with `pip install ./desktop`.
@@ -91,6 +105,11 @@ cd android && ./gradlew :core:runFakePhone -PfakePhoneArgs="4747 /tmp/code.txt"
 # Desktop
 cd desktop && pip install -e ".[dev]" && ruff check . && pytest
 camandroid pair 127.0.0.1 --code "$(cat /tmp/code.txt)" && camandroid stream 127.0.0.1 --no-vcam
+
+# Virtual camera (Visual Studio 2022 or Build Tools, from a developer prompt)
+cmake -S windows/vcam -B build/vcam-x64 -A x64 && cmake --build build/vcam-x64 --config Release
+regsvr32 /n /i:user build\vcam-x64\Release\camandroid-vcam64.dll     # per-user, no admin
+build\vcam-x64\Release\vcamtest.exe --size 1280x720 --feed 200,40,120 --expect 200,40,120
 ```
 
 The protocol and pairing logic live in the pure Kotlin `android/core` module, which is unit tested on
@@ -103,13 +122,33 @@ Every push and pull request runs:
 | Job | What it does |
 |---|---|
 | Android app | Core unit tests, Android lint, unit tests, debug and release APK builds (uploaded as artifacts) |
-| Desktop (Windows) | ruff and pytest, then a PyInstaller build of `camandroid-windows-x86_64.exe` (uploaded as an artifact) |
+| Virtual camera | Builds the 64- and 32-bit camera DLLs, registers them, and captures through real DirectShow graphs: placeholder, 640×480 to 1080p, orientation, 32-bit, the Python writer end to end, and OpenCV as an independent client |
+| Windows app | ruff and pytest, signs the DLLs and exe if configured, builds `camandroid.exe` and the installer, and checks that a silent install and uninstall registers and removes the camera |
 | Interop | Starts the Kotlin server with a fake camera and runs the Python client against it |
-| Release | On a `v*` tag, publishes a GitHub Release with the APK, the Windows exe and SHA256SUMS |
+| Release | On a `v*` tag, publishes a GitHub Release with the APK, the installer, the portable exe and SHA256SUMS |
 
 To cut a release: `git tag v0.1.0 && git push origin v0.1.0`.
 
-### Release signing
+## Signing
+
+### Windows
+
+The camera is a **user-mode** COM DLL loaded by video apps, not a kernel driver. Windows doesn't require
+driver signing (WHQL or attestation) for it, and installing it never needs test-signing mode or
+Secure Boot changes.
+
+Authenticode signing is still worth doing: it removes the SmartScreen "unknown publisher" warning and
+makes antivirus software less suspicious. Signing needs a code-signing certificate issued to you (OV/EV
+from a CA, or [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)). Nobody else
+can obtain one for you, because the CA verifies your identity. Once you have a `.pfx`, add these
+repository secrets and CI signs both camera DLLs, `camandroid.exe` and the installer:
+
+- `WINDOWS_SIGNING_PFX_BASE64`: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")) | Set-Clipboard`
+- `WINDOWS_SIGNING_PFX_PASSWORD`
+
+A self-signed certificate doesn't help other people. It is only trusted on machines where you import it.
+
+### Android
 
 Without signing secrets, CI produces a signed **debug** APK, which you can install, and an **unsigned** release
 APK. To get a signed release APK, create a keystore once:
@@ -128,8 +167,12 @@ Keep `release.jks` backed up somewhere safe: updates must be signed with the sam
 
 - **Phone not discovered**: some routers block mDNS between clients. Use *Pair by address* with the IP
   shown in the app, or use USB.
-- **"Could not open a virtual camera"**: OBS Studio from step 1 is not installed, or another app is
-  already using OBS Virtual Camera. Stop OBS's own virtual camera if it is running.
+- **CamAndroid camera missing in an app**: run `camandroid camera status` (or check the top of the
+  Webcam panel), install it, then **restart the video app**, because apps list cameras when they start.
+  Apps that only use the newer Media Foundation camera stack, such as the built-in Windows Camera app,
+  don't list DirectShow cameras.
+- **USB: "No phone found"**: check that USB debugging is on, that the cable carries data (not just
+  charge), and that you accepted the prompt on the phone. A few brands need their own USB driver.
 - **Fingerprint mismatch**: you reinstalled the app or cleared its data, which creates a new identity.
   Click *Forget* and pair again. If you did neither, treat it as a possible interception.
 - **Choppy video**: lower the quality or resolution, use 5 GHz Wi-Fi, or switch to USB.

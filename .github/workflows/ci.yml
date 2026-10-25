@@ -121,17 +121,12 @@ jobs:
           $p = Start-Process "$env:SystemRoot\System32\regsvr32.exe" -ArgumentList "/s","/n","/i:user","`"$dll`"" -Wait -PassThru
           if ($p.ExitCode) { throw "regsvr32 /i:user failed: $($p.ExitCode)" }
           reg query "HKCU\Software\Classes\CLSID\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\Instance" /s
-          # Runner processes are elevated, and elevated processes ignore per-user COM registrations.
-          # Check visibility from a normal (non-elevated) process, like Zoom or Chrome would be.
-          $out = Join-Path $env:RUNNER_TEMP "medium.txt"
-          $exe = (Resolve-Path windows/vcam/dist/vcamtest64.exe).Path
-          runas /trustlevel:0x20000 "cmd /c `"$exe`" --list > `"$out`" 2>&1"
-          for ($i = 0; $i -lt 30 -and -not (Test-Path $out); $i++) { Start-Sleep 1 }
-          Start-Sleep 2
-          if (Test-Path $out) { Get-Content $out } else { Write-Host "::warning::could not start a non-elevated test process" }
-          Write-Host "--- elevated view (informational):"
-          windows/vcam/dist/vcamtest64.exe --list
+          & windows/vcam/dist/vcamtest64.exe --size 1280x720 --seconds 2 --feed 120,60,200 --expect 120,60,200
+          if ($LASTEXITCODE) { exit 1 }
           $p = Start-Process "$env:SystemRoot\System32\regsvr32.exe" -ArgumentList "/s","/u","/n","/i:user","`"$dll`"" -Wait -PassThru
+          & windows/vcam/dist/vcamtest64.exe --list
+          if ($LASTEXITCODE -eq 0) { throw "camera still visible after per-user uninstall" }
+          exit 0
 
       - name: Machine-wide registration (what the installer does)
         run: |
@@ -167,8 +162,6 @@ jobs:
     name: Windows app (exe + installer)
     needs: vcam
     runs-on: windows-latest
-    env:
-      PLATFORM_TOOLS: platform-tools_r35.0.2-windows.zip
     defaults:
       run:
         shell: pwsh
@@ -187,11 +180,17 @@ jobs:
 
       - name: Fetch adb (Android platform-tools)
         run: |
-          Invoke-WebRequest "https://dl.google.com/android/repository/$env:PLATFORM_TOOLS" -OutFile pt.zip
-          (Get-FileHash pt.zip -Algorithm SHA256).Hash
-          Expand-Archive pt.zip -DestinationPath pt
+          $src = "pt/platform-tools"
+          try {
+            Invoke-WebRequest "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile pt.zip
+            Write-Host "platform-tools zip SHA256: $((Get-FileHash pt.zip -Algorithm SHA256).Hash)"
+            Expand-Archive pt.zip -DestinationPath pt
+          } catch {
+            Write-Host "::warning::download failed ($_); using the runner's Android SDK copy"
+            $src = "$env:ANDROID_HOME/platform-tools"
+          }
           New-Item -ItemType Directory -Force windows/adb | Out-Null
-          Copy-Item pt/platform-tools/adb.exe, pt/platform-tools/AdbWinApi.dll, pt/platform-tools/AdbWinUsbApi.dll, pt/platform-tools/NOTICE.txt windows/adb/
+          Copy-Item "$src/adb.exe", "$src/AdbWinApi.dll", "$src/AdbWinUsbApi.dll", "$src/NOTICE.txt" windows/adb/
           windows/adb/adb.exe version
 
       - uses: actions/setup-python@v5
