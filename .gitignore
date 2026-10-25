@@ -18,3 +18,4 @@ desktop/out/
 # Signing material must never be committed
 *.jks
 *.keystore
+build/

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .protocol import DEFAULT_PORT
+from .resources import find_bundled
 
 LOCAL_USB_PORT = 47470
 
@@ -19,6 +20,9 @@ class AdbError(Exception):
 
 def find_adb() -> str:
     exe = "adb.exe" if sys.platform == "win32" else "adb"
+    bundled = find_bundled("adb", [exe, "AdbWinApi.dll"] if sys.platform == "win32" else [exe])
+    if bundled:
+        return str(bundled / exe)
     found = shutil.which("adb")
     if found:
         return found
@@ -33,15 +37,13 @@ def find_adb() -> str:
         path = Path(root) / "platform-tools" / exe
         if path.exists():
             return str(path)
-    raise AdbError(
-        "adb not found. Install Android platform-tools "
-        "(https://developer.android.com/tools/releases/platform-tools) and add it to PATH."
-    )
+    raise AdbError("adb not found. It ships with the CamAndroid installer; reinstall the app.")
 
 
 def _run(args: list[str]) -> str:
     try:
-        result = subprocess.run([find_adb(), *args], capture_output=True, text=True, timeout=15)
+        result = subprocess.run([find_adb(), *args], capture_output=True, text=True, timeout=15,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired as e:
         raise AdbError("adb timed out") from e
     if result.returncode != 0:
@@ -49,15 +51,27 @@ def _run(args: list[str]) -> str:
     return result.stdout
 
 
+def device_states() -> dict[str, str]:
+    """Serial -> state ('device', 'unauthorized', 'offline', ...)."""
+    out = {}
+    for line in _run(["devices"]).splitlines()[1:]:
+        parts = line.strip().split("\t")
+        if len(parts) == 2:
+            out[parts[0]] = parts[1]
+    return out
+
+
 def devices() -> list[str]:
     """Serials of connected, authorized devices."""
-    lines = _run(["devices"]).splitlines()[1:]
-    return [line.split("\t")[0] for line in lines if line.strip().endswith("\tdevice")]
+    return [s for s, state in device_states().items() if state == "device"]
 
 
 def forward(serial: str | None = None, local_port: int = LOCAL_USB_PORT, remote_port: int = DEFAULT_PORT) -> int:
     """Forward localhost:local_port to the phone's server port. Returns the local port."""
-    found = devices()
+    states = device_states()
+    found = [s for s, state in states.items() if state == "device"]
+    if not found and "unauthorized" in states.values():
+        raise AdbError("Unlock the phone and accept the 'Allow USB debugging?' prompt (tick 'Always allow').")
     if not found:
         raise AdbError(
             "No phone found over USB. Enable Developer options > USB debugging on the phone, "

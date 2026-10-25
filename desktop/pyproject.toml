@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "Pillow>=10.0",
-    "pyvirtualcam>=0.12",
     "zeroconf>=0.131",
 ]
 

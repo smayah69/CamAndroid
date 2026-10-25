@@ -83,15 +83,116 @@ jobs:
             android/app/build/reports
             android/core/build/reports
 
-  desktop:
-    name: Desktop (Windows)
+  vcam:
+    name: Virtual camera (build + DirectShow tests)
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: desktop
-        shell: bash
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build camera DLL and test client (x64 and x86)
+        run: |
+          foreach ($arch in @("x64", "Win32")) {
+            cmake -S windows/vcam -B "build/vcam-$arch" -A $arch
+            if ($LASTEXITCODE) { exit 1 }
+            cmake --build "build/vcam-$arch" --config Release
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          New-Item -ItemType Directory -Force windows/vcam/dist | Out-Null
+          Copy-Item build/vcam-x64/Release/camandroid-vcam64.dll, build/vcam-Win32/Release/camandroid-vcam32.dll windows/vcam/dist/
+          Copy-Item build/vcam-x64/Release/vcamtest.exe windows/vcam/dist/vcamtest64.exe
+          Copy-Item build/vcam-Win32/Release/vcamtest.exe windows/vcam/dist/vcamtest32.exe
+          Get-ChildItem windows/vcam/dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: desktop/pyproject.toml
+
+      - name: Install desktop package and OpenCV (third-party DirectShow client)
+        run: python -m pip install -e "desktop[dev]" opencv-python-headless
+
+      - name: Per-user registration (what the portable app does, no admin)
+        run: |
+          $dll = (Resolve-Path windows/vcam/dist/camandroid-vcam64.dll).Path
+          $p = Start-Process "$env:SystemRoot\System32\regsvr32.exe" -ArgumentList "/s","/n","/i:user","`"$dll`"" -Wait -PassThru
+          if ($p.ExitCode) { throw "regsvr32 /i:user failed: $($p.ExitCode)" }
+          reg query "HKCU\Software\Classes\CLSID\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\Instance" /s
+          # Runner processes are elevated, and elevated processes ignore per-user COM registrations.
+          # Check visibility from a normal (non-elevated) process, like Zoom or Chrome would be.
+          $out = Join-Path $env:RUNNER_TEMP "medium.txt"
+          $exe = (Resolve-Path windows/vcam/dist/vcamtest64.exe).Path
+          runas /trustlevel:0x20000 "cmd /c `"$exe`" --list > `"$out`" 2>&1"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $out); $i++) { Start-Sleep 1 }
+          Start-Sleep 2
+          if (Test-Path $out) { Get-Content $out } else { Write-Host "::warning::could not start a non-elevated test process" }
+          Write-Host "--- elevated view (informational):"
+          windows/vcam/dist/vcamtest64.exe --list
+          $p = Start-Process "$env:SystemRoot\System32\regsvr32.exe" -ArgumentList "/s","/u","/n","/i:user","`"$dll`"" -Wait -PassThru
+
+      - name: Machine-wide registration (what the installer does)
+        run: |
+          foreach ($pair in @(@("System32", "camandroid-vcam64.dll"), @("SysWOW64", "camandroid-vcam32.dll"))) {
+            $dll = (Resolve-Path "windows/vcam/dist/$($pair[1])").Path
+            $p = Start-Process "$env:SystemRoot\$($pair[0])\regsvr32.exe" -ArgumentList "/s","`"$dll`"" -Wait -PassThru
+            if ($p.ExitCode) { throw "regsvr32 failed for $dll : $($p.ExitCode)" }
+          }
+
+      - name: DirectShow capture tests (placeholder, sizes, orientation, 32-bit)
+        run: |
+          $t = "windows/vcam/dist"
+          & "$t/vcamtest64.exe" --seconds 2;                                                     if ($LASTEXITCODE) { exit 1 }
+          & "$t/vcamtest64.exe" --size 640x480 --seconds 2 --feed 200,40,120 --expect 200,40,120;  if ($LASTEXITCODE) { exit 1 }
+          & "$t/vcamtest64.exe" --size 1920x1080 --seconds 2 --feed 250,250,0 --split --expect 250,250,0; if ($LASTEXITCODE) { exit 1 }
+          & "$t/vcamtest32.exe" --size 1280x720 --seconds 2 --feed 10,220,30 --expect 10,220,30;   if ($LASTEXITCODE) { exit 1 }
+
+      - name: End-to-end from Python writer (vcamtest + OpenCV)
+        working-directory: desktop
+        env:
+          CAMANDROID_VCAMTEST: ${{ github.workspace }}\windows\vcam\dist\vcamtest64.exe
+        run: python -m pytest tests/test_vcam.py -v -s
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vcam-build
+          path: |
+            windows/vcam/dist/camandroid-vcam64.dll
+            windows/vcam/dist/camandroid-vcam32.dll
+          if-no-files-found: error
+
+  desktop:
+    name: Windows app (exe + installer)
+    needs: vcam
+    runs-on: windows-latest
+    env:
+      PLATFORM_TOOLS: platform-tools_r35.0.2-windows.zip
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if ("$env:GITHUB_REF" -like "refs/tags/v*") { $v = "$env:GITHUB_REF_NAME".Substring(1) } else { $v = "0.2.0-dev.$env:GITHUB_RUN_NUMBER" }
+          "VERSION_NAME=$v" >> $env:GITHUB_ENV
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vcam-build
+          path: windows/vcam/dist
+
+      - name: Fetch adb (Android platform-tools)
+        run: |
+          Invoke-WebRequest "https://dl.google.com/android/repository/$env:PLATFORM_TOOLS" -OutFile pt.zip
+          (Get-FileHash pt.zip -Algorithm SHA256).Hash
+          Expand-Archive pt.zip -DestinationPath pt
+          New-Item -ItemType Directory -Force windows/adb | Out-Null
+          Copy-Item pt/platform-tools/adb.exe, pt/platform-tools/AdbWinApi.dll, pt/platform-tools/AdbWinUsbApi.dll, pt/platform-tools/NOTICE.txt windows/adb/
+          windows/adb/adb.exe version
 
       - uses: actions/setup-python@v5
         with:
@@ -100,27 +201,72 @@ jobs:
           cache-dependency-path: desktop/pyproject.toml
 
       - name: Install
+        working-directory: desktop
         run: python -m pip install -e ".[dev,build]"
 
       - name: Lint
+        working-directory: desktop
         run: ruff check .
 
       - name: Test
+        working-directory: desktop
         run: python -m pytest -v
 
-      - name: Build executable
+      - name: Sign camera DLLs
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: ./windows/sign.ps1 windows/vcam/dist/camandroid-vcam64.dll windows/vcam/dist/camandroid-vcam32.dll
+
+      - name: Build camandroid.exe
+        working-directory: desktop
         run: pyinstaller --noconfirm camandroid.spec
 
-      - name: Package
+      - name: Sign camandroid.exe
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: ./windows/sign.ps1 desktop/dist/camandroid.exe
+
+      - name: Build installer
         run: |
-          mkdir -p out
-          cp dist/camandroid.exe out/camandroid-windows-x86_64.exe
-          ls -l out
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          } else { $iscc = (Get-Command iscc).Source }
+          & $iscc /Qp "/DAppVersion=$env:VERSION_NAME" windows/installer/camandroid.iss
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Sign installer and collect outputs
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          ./windows/sign.ps1 "desktop/out/CamAndroid-Setup-$env:VERSION_NAME.exe"
+          Copy-Item desktop/dist/camandroid.exe "desktop/out/CamAndroid-$env:VERSION_NAME-portable.exe"
+          Get-ChildItem desktop/out
+
+      - name: Installer smoke test (silent install, camera visible, uninstall)
+        run: |
+          $setup = "desktop/out/CamAndroid-Setup-$env:VERSION_NAME.exe"
+          $p = Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode) { throw "install failed: $($p.ExitCode)" }
+          $app = "$env:ProgramFiles\CamAndroid"
+          Get-ChildItem -Recurse $app | Select-Object FullName
+          reg query "HKLM\Software\Classes\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32"
+          reg query "HKLM\Software\Classes\WOW6432Node\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}\InprocServer32"
+          & "$app\adb\adb.exe" version; if ($LASTEXITCODE) { exit 1 }
+          $p = Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($p.ExitCode) { throw "uninstall failed: $($p.ExitCode)" }
+          Start-Sleep 3
+          reg query "HKLM\Software\Classes\CLSID\{F216EFC3-E8A2-425E-A80C-24FBA2B0DB23}" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "camera still registered after uninstall" }
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
-          name: camandroid-windows-x86_64
-          path: desktop/out/*
+          name: camandroid-windows
+          path: desktop/out/*.exe
           if-no-files-found: error
 
   interop:
@@ -159,15 +305,19 @@ jobs:
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, desktop, interop]
+    needs: [android, vcam, desktop, interop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: android-apk
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: camandroid-windows
+          path: dist
       - name: Checksums
         run: |
           cd dist
