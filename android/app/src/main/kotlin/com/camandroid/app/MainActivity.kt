@@ -58,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -177,14 +178,19 @@ private fun MainScreen() {
     ModalNavigationDrawer(
         drawerState = drawer,
         drawerContent = {
-            ModalDrawerSheet {
-                Text(
-                    "CamAndroid",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 20.dp),
-                )
+            // Half the screen is plenty for three entries (the default sheet is much wider).
+            ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.5f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+                ) {
+                    AppIcon(32.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("CamAndroid", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
                 Page.entries.forEach { p ->
                     NavigationDrawerItem(
+                        icon = { Icon(painterResource(p.icon), contentDescription = null) },
                         label = { Text(p.label) },
                         selected = page == p,
                         onClick = {
@@ -203,7 +209,7 @@ private fun MainScreen() {
                     title = { Text(if (page == Page.Home) "CamAndroid" else page.label) },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawer.open() } }) {
-                            Icon(MenuIcon, contentDescription = "Menu")
+                            Icon(painterResource(R.drawable.ic_menu), contentDescription = "Menu")
                         }
                     },
                 )
