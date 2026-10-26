@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import sys
 
 import pytest
 
@@ -99,3 +100,16 @@ def test_adb_start_app_falls_back_to_debug_build(monkeypatch):
     monkeypatch.setattr(adb, "_run", lambda args: "Error: not found" if "am" in args else "")
     with pytest.raises(adb.AdbError, match="not installed"):
         adb.start_app("R58M123")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="checks the Windows process environment block")
+def test_child_processes_do_not_inherit_pyinstaller_variables(monkeypatch):
+    """What the installer (and the new CamAndroid it starts) will see."""
+    import subprocess
+
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\\Temp\\_MEI12345")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\\Program Files\\CamAndroid\\camandroid.exe")
+    updates.clean_child_environment()
+    out = subprocess.run(["cmd", "/c", "set"], capture_output=True, text=True, check=True).stdout
+    assert "_PYI_" not in out.upper()
+    assert "PYINSTALLER_RESET_ENVIRONMENT=1" in out

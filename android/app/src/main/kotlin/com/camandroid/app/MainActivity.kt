@@ -21,7 +21,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -70,6 +83,15 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == ACTION_START_SERVER) AppGraph.autoStart.value = true
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Back from "Install unknown apps": continue the update if it was allowed.
+        if (Updater.waitingForPermission) {
+            Updater.waitingForPermission = false
+            if (packageManager.canRequestPackageInstalls()) Updater.installNow.value = true
+        }
+    }
+
     companion object {
         /** Sent by the desktop app over USB: `adb shell am start -a <this> -n <package>/.MainActivity`. */
         const val ACTION_START_SERVER = "com.camandroid.app.action.START_SERVER"
@@ -79,7 +101,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleIntent(intent)
-        if (savedInstanceState == null) Updater.check(quiet = true) // every launch, not on rotation
+        if (savedInstanceState == null) Updater.check(this, quiet = true) // every launch, not on rotation
         setContent {
             CamAndroidTheme {
                 MainScreen()
@@ -135,28 +157,84 @@ private fun MainScreen() {
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("CamAndroid") }) }) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            if (update is Updater.State.Available || update is Updater.State.Downloading || update is Updater.State.Ready) {
-                UpdateCard(update, streaming = state.streaming != null)
+    // A verified update is ready: open Android's installer right away (only while we are visible).
+    val installNow by Updater.installNow.collectAsStateWithLifecycle()
+    LaunchedEffect(installNow, update) {
+        val ready = update as? Updater.State.Ready
+        if (installNow && ready != null) {
+            Updater.installNow.value = false
+            Updater.install(context, ready.file)
+        }
+    }
+
+    var page by rememberSaveable { mutableStateOf(Page.Home) }
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    BackHandler(enabled = drawer.isOpen || page != Page.Home) {
+        if (drawer.isOpen) scope.launch { drawer.close() } else page = Page.Home
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text(
+                    "CamAndroid",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 20.dp),
+                )
+                Page.entries.forEach { p ->
+                    NavigationDrawerItem(
+                        label = { Text(p.label) },
+                        selected = page == p,
+                        onClick = {
+                            page = p
+                            scope.launch { drawer.close() }
+                        },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                    )
+                }
             }
-            ServerCard(state, onStart = startServer, onStop = { CameraService.stop(context) })
-            if (state.running) {
-                PairingCard(code)
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (page == Page.Home) "CamAndroid" else page.label) },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawer.open() } }) {
+                            Icon(MenuIcon, contentDescription = "Menu")
+                        }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                when (page) {
+                    Page.Home -> {
+                        if (update is Updater.State.Available || update is Updater.State.Downloading || update is Updater.State.Ready) {
+                            UpdateCard(update, streaming = state.streaming != null)
+                        }
+                        ServerCard(state, onStart = startServer, onStop = { CameraService.stop(context) })
+                        if (state.running) {
+                            PairingCard(code)
+                        }
+                        PairedComputersCard(clients)
+                        state.message?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Page.Help -> HelpPage()
+                    Page.About -> AboutPage(update)
+                }
             }
-            PairedComputersCard(clients)
-            state.message?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-            }
-            HelpCard()
-            AboutCard(update)
         }
     }
 }
@@ -274,18 +352,6 @@ private fun PairedComputersCard(clients: List<PairedClient>) {
 }
 
 @Composable
-private fun HelpCard() {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("How to connect", style = MaterialTheme.typography.titleMedium)
-            Text("Wi-Fi: phone and computer on the same network; the desktop app finds the phone automatically.")
-            Text("USB: enable Developer options › USB debugging and plug in the cable; the phone shows up as USB in the desktop app.")
-            Text("Video is encrypted with TLS and only paired computers can connect.")
-        }
-    }
-}
-
-@Composable
 private fun UpdateCard(update: Updater.State, streaming: Boolean) {
     val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -306,45 +372,13 @@ private fun UpdateCard(update: Updater.State, streaming: Boolean) {
                 }
                 is Updater.State.Ready -> {
                     Text("CamAndroid ${update.update.versionName} is ready", style = MaterialTheme.typography.titleMedium)
-                    Text("Verified download. Android will ask you to confirm the update.")
+                    Text("Downloaded and verified. If the installer closed, tap Update to open it again.")
                     Button(onClick = { Updater.install(context, update.file) }, modifier = Modifier.fillMaxWidth()) {
                         Text("Update")
                     }
                 }
                 else -> Unit
             }
-        }
-    }
-}
-
-@Composable
-private fun AboutCard(update: Updater.State) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("About", style = MaterialTheme.typography.titleMedium)
-            Text("CamAndroid ${BuildConfig.VERSION_NAME} by Omar Kharrat (@smayah69)")
-            if (!Updater.enabled) {
-                Text("Debug build: updates are off.", style = MaterialTheme.typography.bodySmall)
-                return@Column
-            }
-            val status = when (update) {
-                Updater.State.Checking -> "Checking for updates…"
-                Updater.State.UpToDate -> "You have the latest version."
-                is Updater.State.Failed -> update.message
-                is Updater.State.Available -> "Version ${update.update.versionName} is available."
-                else -> null
-            }
-            status?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (update is Updater.State.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            OutlinedButton(
-                onClick = { Updater.check(quiet = false) },
-                enabled = update !is Updater.State.Checking && update !is Updater.State.Downloading,
-            ) { Text("Check for updates") }
         }
     }
 }

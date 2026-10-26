@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import tempfile
@@ -127,3 +128,15 @@ def installed_with_setup() -> bool:
     if not getattr(sys, "frozen", False):
         return False
     return any(Path(sys.executable).resolve().parent.glob("unins*.exe"))
+
+
+def clean_child_environment() -> None:
+    """Removes PyInstaller's variables before starting the installer.
+
+    The one-file bootloader passes _PYI_* to its children. The installer would hand them to the new
+    CamAndroid it starts ("Start CamAndroid" box), which would then look for its Python DLL in this
+    process's temp folder, deleted when we exit: "Failed to load Python DLL".
+    """
+    for key in [k for k in os.environ if k.upper().startswith(("_PYI_", "_MEIPASS"))]:
+        del os.environ[key]  # on Windows this updates the real process environment block
+    os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # in case anything is left: start afresh

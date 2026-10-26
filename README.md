@@ -149,8 +149,9 @@ To update, install the new APK over the old one on the phone, and run the new in
 
 **Phone updates** come from `https://bombo.cu.ma/extras/camandroid/`. Each release uploads the APK and
 `version.json` there over FTPS (`scripts/publish-apk-ftp.sh`); the app checks `version.json` when it
-opens (and from *About › Check for updates*), downloads the APK from the same server, verifies its
-SHA-256 and signing key, and opens Android's installer. Setup: add the repository secret
+opens (and from *☰ › About › Check for updates*), downloads the APK from the same server, verifies
+its SHA-256 and signing key, and opens Android's installer right away. A download that wasn't
+installed is kept and offered again the next time the app opens, without downloading it again. Setup: add the repository secret
 `FTP_PASSWORD`. Optional repository variables: `FTP_HOST` (default `bombo.cu.ma`), `FTP_USER`
 (`omar@bombo.cu.ma`), `FTP_DIR` (`public_html/extras/camandroid`), and `FTP_ALLOW_PLAIN=true` if
 the server has no TLS. *Actions › Publish APK to bombo.cu.ma › Run workflow* re-uploads a release

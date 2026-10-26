@@ -570,12 +570,7 @@ class App:
 
     def _run_installer(self, path) -> None:
         log.info("Starting installer %s", path)
-        # PyInstaller passes its own variables (_PYI_*) to child processes. The installer would hand
-        # them to the new CamAndroid it starts, which would then look for its Python DLL in this
-        # (soon deleted) process's temp folder: "Failed to load Python DLL".
-        for key in [k for k in os.environ if k.upper().startswith(("_PYI_", "_MEIPASS"))]:
-            del os.environ[key]
-        os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        updates.clean_child_environment()
         try:
             os.startfile(path)  # noqa: S606 - verified download from our GitHub releases
         except OSError as e:

@@ -49,19 +49,39 @@ object Updater {
 
     val state = MutableStateFlow<State>(State.Idle)
 
+    /** Set when a verified APK is ready: the visible activity opens the installer right away. */
+    val installNow = MutableStateFlow(false)
+
+    /** True while the user is in Settings allowing CamAndroid to install apps. */
+    @Volatile var waitingForPermission = false
+
     /** Only the release build updates itself; debug builds are a different app (.debug). */
     val enabled: Boolean get() = BuildConfig.APPLICATION_ID == "com.camandroid.app"
 
-    /** Checks in the background (every time the app opens, and on demand); [quiet] hides errors. */
-    fun check(quiet: Boolean) {
+    /**
+     * Checks in the background (every time the app opens, and on demand); [quiet] hides errors.
+     * An update downloaded earlier but not installed is reused and offered for install at once.
+     */
+    fun check(context: Context, quiet: Boolean) {
         if (!enabled) return
+        val app = context.applicationContext
         val s = state.value
-        if (s is State.Checking || s is State.Downloading || s is State.Ready) return
+        if (s is State.Checking || s is State.Downloading) return
+        if (s is State.Ready) {
+            installNow.value = true // opened again without installing: offer it again
+            return
+        }
         if (!quiet) state.value = State.Checking
         thread(name = "update-check", isDaemon = true) {
             state.value = try {
                 val update = fetch()
-                if (update.versionCode > BuildConfig.VERSION_CODE) State.Available(update) else State.UpToDate
+                cleanUp(app, keep = update)
+                val cached = if (update.versionCode > BuildConfig.VERSION_CODE) cachedApk(app, update) else null
+                when {
+                    cached != null -> State.Ready(update, cached).also { installNow.value = true }
+                    update.versionCode > BuildConfig.VERSION_CODE -> State.Available(update)
+                    else -> State.UpToDate
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "Update check failed", e)
                 if (quiet) State.Idle else State.Failed("Could not check for updates: ${e.message}")
@@ -74,7 +94,7 @@ object Updater {
         state.value = State.Downloading(update, 0f)
         thread(name = "update-download", isDaemon = true) {
             state.value = try {
-                State.Ready(update, fetchApk(app, update))
+                State.Ready(update, fetchApk(app, update)).also { installNow.value = true }
             } catch (e: Exception) {
                 Log.w(TAG, "Update download failed", e)
                 State.Failed("Download failed: ${e.message}")
@@ -85,7 +105,7 @@ object Updater {
     /** Opens Android's installer for a verified download (asking for "install unknown apps" first). */
     fun install(context: Context, file: File) {
         if (!context.packageManager.canRequestPackageInstalls()) {
-            state.value = State.Failed("Allow CamAndroid to install apps (the switch on the next screen), then come back and tap Update again.")
+            waitingForPermission = true // MainActivity.onResume continues once it is allowed
             context.startActivity(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -134,9 +154,8 @@ object Updater {
     }
 
     private fun fetchApk(context: Context, update: Update): File {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() } // only ever keep the download in progress
-        val file = File(dir, "CamAndroid-${update.versionCode}.apk")
+        val file = apkFile(context, update)
+        updatesDir(context).listFiles()?.forEach { it.delete() } // only ever keep one download
         val digest = MessageDigest.getInstance("SHA-256")
         val conn = open(update.url)
         try {
@@ -170,6 +189,45 @@ object Updater {
         }
         verifyApk(context, file, update)
         return file
+    }
+
+    /** Kept in app storage (not the cache, which Android may clear) until the update is installed. */
+    private fun updatesDir(context: Context) = File(context.filesDir, "updates").apply { mkdirs() }
+
+    private fun apkFile(context: Context, update: Update) = File(updatesDir(context), "CamAndroid-${update.versionCode}.apk")
+
+    /** A complete, verified earlier download of [update], or null. */
+    private fun cachedApk(context: Context, update: Update): File? {
+        val file = apkFile(context, update)
+        if (!file.isFile) return null
+        return try {
+            val sha = file.inputStream().use { input ->
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    digest.update(buf, 0, n)
+                }
+                Hex.encode(digest.digest())
+            }
+            if (sha != update.sha256) throw IOException("SHA-256 mismatch")
+            verifyApk(context, file, update)
+            Log.i(TAG, "Reusing the downloaded update ${update.versionName}")
+            file
+        } catch (e: IOException) {
+            Log.w(TAG, "Discarding the earlier download", e)
+            file.delete()
+            null
+        }
+    }
+
+    /** Deletes downloads other than [keep] (installed already, or replaced by a newer version). */
+    private fun cleanUp(context: Context, keep: Update) {
+        val wanted = apkFile(context, keep).name
+        updatesDir(context).listFiles()?.filter { it.name != wanted || keep.versionCode <= BuildConfig.VERSION_CODE }
+            ?.forEach { it.delete() }
+        File(context.cacheDir, "updates").deleteRecursively() // where older versions downloaded to
     }
 
     private fun verifyApk(context: Context, file: File, update: Update) {
