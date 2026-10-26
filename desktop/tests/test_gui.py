@@ -20,8 +20,10 @@ def app(monkeypatch, tmp_path):
         pytest.skip(f"no display: {e}")
     a = gui.App(root)
     yield a
-    if a.root.winfo_exists():
+    try:
         a.on_close()
+    except tk.TclError:
+        pass  # the test already closed the window
 
 
 def pump(app, rounds=20):
@@ -32,7 +34,7 @@ def pump(app, rounds=20):
 
 def test_tabs_and_defaults(app):
     assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["Webcam", "Logs", "About"]
-    assert app.mirror.get() is True
+    assert app.mirror.get() is False
     assert app.fps.get() == "60"
 
 
@@ -72,10 +74,33 @@ def test_logs_tab_shows_records(app):
     assert "hello from the test" in app.log_text.get("1.0", "end")
 
 
-def test_about_tab_offers_update(app):
+def test_about_tab_offers_update(app, monkeypatch):
+    asked, installs = [], []
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda *a, **k: asked.append(a) or True)
+    monkeypatch.setattr(app, "install_update", lambda: installs.append(1))
     release = updates.Release("99.0.0", updates.RELEASES_URL, "", [])
-    app._show_release(release, quiet=True)
+    app._show_release(release, quiet=True)  # the check made at every start
+    assert len(asked) == 1 and "99.0.0" in asked[0][1], "startup check should ask to update"
+    assert installs == [1]
     assert "99.0.0" in app.update_status.get()
     assert app.install_btn.winfo_manager() == "grid"
     app._show_release(updates.Release("0.0.1", updates.RELEASES_URL, "", []), quiet=True)
     assert "latest" in app.update_status.get()
+
+
+def test_installer_starts_with_a_clean_environment(app, monkeypatch):
+    """Otherwise the new version, started by the installer, fails with "Failed to load Python DLL"."""
+    import os
+
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI12345")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", r"C:\Program Files\CamAndroid\camandroid.exe")
+    seen = {}
+
+    def fake_startfile(path):
+        seen.update(path=path, env=dict(os.environ))
+
+    monkeypatch.setattr(os, "startfile", fake_startfile, raising=False)
+    app._run_installer("CamAndroid-Setup-9.9.9.exe")
+    assert seen["path"] == "CamAndroid-Setup-9.9.9.exe"
+    assert not [k for k in seen["env"] if k.startswith("_PYI_")]
+    assert seen["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

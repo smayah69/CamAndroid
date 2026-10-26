@@ -23,7 +23,7 @@ class OutputOptions:
     width: int = 1280
     height: int = 720
     rotate: int = 0  # extra clockwise rotation on top of the phone's own orientation
-    mirror: bool = True
+    mirror: bool = False  # flip on top of the natural view: front camera mirrored, back camera not
     fill: bool = False  # crop to fill instead of letterboxing
 
 
@@ -155,7 +155,9 @@ class Renderer:
                 self._h264.decode(frame)
             return None
         # The GUI changes rotate/mirror/fill from another thread; use one consistent snapshot.
+        # Selfies look natural mirrored (like a mirror); the checkbox flips either camera.
         opts = dataclasses.replace(self.opts)
+        opts.mirror = opts.mirror != frame.front_camera
         rotation = (frame.rotation + opts.rotate) % 360
         swap = rotation in (90, 270)
         if frame.data[:2] == JPEG_MAGIC:

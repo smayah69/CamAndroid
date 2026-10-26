@@ -29,6 +29,8 @@ from .video import OutputOptions, Renderer
 log = logging.getLogger(__name__)
 
 FATAL_REMOTE_CODES = {"unknown_client", "bad_proof", "version"}
+GIVE_UP_AFTER_S = 120  # stop trying when no phone answers for this long (the phone app does the same)
+APP_START_INTERVAL_S = 15  # over USB, reopen the phone app at most this often while it doesn't answer
 
 
 @dataclass
@@ -113,6 +115,8 @@ class StreamSession(threading.Thread):
         self.fps = 0.0
         self.codec = ""
         self.delay = 0.0  # seconds the shown video is behind
+        self._last_contact = time.monotonic()  # start of the session, then last time the phone answered
+        self._answered_at = 0.0  # last time the phone answered (0: not yet)
 
     # -- control from other threads ----------------------------------------------------------
 
@@ -147,7 +151,20 @@ class StreamSession(threading.Thread):
                 vcam = VirtualCamera(self.output.width, self.output.height, self.settings.fps)
                 self._status("Virtual camera 'CamAndroid' ready")
             backoff = 1.0
+            self._last_contact = time.monotonic()
+            last_app_start = 0.0
             while not self._stop_event.is_set():
+                # The phone answered recently: it is running, don't bring the app to the front again.
+                last_app_start = max(last_app_start, self._answered_at)
+                if self.target.usb and time.monotonic() - last_app_start >= APP_START_INTERVAL_S:
+                    last_app_start = time.monotonic()
+                    try:
+                        adb.start_app(self.target.serial)
+                        self._status("Starting CamAndroid on the phone…")
+                        if self._stop_event.wait(1.5):  # let the server come up
+                            break
+                    except adb.AdbError as e:
+                        self._status(f"USB: {e}")
                 try:
                     self._stream_once(vcam)
                     backoff = 1.0
@@ -173,6 +190,10 @@ class StreamSession(threading.Thread):
                     if self._stop_event.is_set():
                         break
                     self._status(f"Connection lost ({e.__class__.__name__}); reconnecting in {backoff:.0f}s…")
+                if time.monotonic() - self._last_contact >= GIVE_UP_AFTER_S:
+                    self._error(f"Stopped: no answer from {self.target.describe()} for "
+                                f"{GIVE_UP_AFTER_S // 60} minutes. Open CamAndroid on the phone and start again.")
+                    return
                 if self._stop_event.wait(backoff):
                     break
                 backoff = min(backoff * 2, 10.0)
@@ -192,6 +213,7 @@ class StreamSession(threading.Thread):
             if self._stop_event.is_set():
                 return
             device = conn.authenticate(self.store, self.target.device)
+            self._last_contact = self._answered_at = time.monotonic()
             if not self.target.usb:
                 self.store.update_address(device.fingerprint, conn.host, conn.port)
             conn.settimeout(10.0)
@@ -211,6 +233,7 @@ class StreamSession(threading.Thread):
                 batch = reader.take(timeout=0.5)
                 if not batch:
                     continue
+                self._last_contact = self._answered_at = time.monotonic()
                 for arrival, f in batch:
                     lag.arrived(arrival, f.timestamp_us)
                     window_bytes += len(f.data)

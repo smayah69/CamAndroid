@@ -28,6 +28,8 @@ data class ServerState(
     val client: String? = null,
     val streaming: StreamConfig? = null,
     val message: String? = null,
+    /** When the server stops by itself if no computer connects (wall-clock ms), or null. */
+    val idleStopAt: Long? = null,
 )
 
 /** Process-wide singletons shared by the UI and [CameraService]. */
@@ -38,6 +40,9 @@ object AppGraph {
     val state = MutableStateFlow(ServerState())
     val pairingCode = MutableStateFlow<PairingManager.ActiveCode?>(null)
     val pairedClients = MutableStateFlow<List<PairedClient>>(emptyList())
+
+    /** Set when the desktop app opens us over USB (adb) to start the server right away. */
+    val autoStart = MutableStateFlow(false)
 
     val pairing = PairingManager().apply { onChange = { pairingCode.value = it } }
 

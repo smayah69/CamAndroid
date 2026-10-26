@@ -12,6 +12,8 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -37,6 +39,31 @@ class CameraService : LifecycleService() {
     private var registration: NsdManager.RegistrationListener? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val idleStop = object : Runnable {
+        override fun run() {
+            if (AppGraph.pairingCode.value != null) {
+                handler.postDelayed(this, IDLE_TIMEOUT_MS) // someone is pairing right now
+                AppGraph.state.update { it.copy(idleStopAt = System.currentTimeMillis() + IDLE_TIMEOUT_MS) }
+                return
+            }
+            Log.i(TAG, "No computer connected for ${IDLE_TIMEOUT_MS / 1000} s, stopping")
+            AppGraph.report("Stopped: no computer connected for 2 minutes.")
+            stopSelf()
+        }
+    }
+
+    /** Stops the server if no computer connects within [IDLE_TIMEOUT_MS] (saves battery). */
+    private fun scheduleIdleStop() {
+        handler.removeCallbacks(idleStop)
+        handler.postDelayed(idleStop, IDLE_TIMEOUT_MS)
+        AppGraph.state.update { it.copy(idleStopAt = System.currentTimeMillis() + IDLE_TIMEOUT_MS) }
+    }
+
+    private fun cancelIdleStop() {
+        handler.removeCallbacks(idleStop)
+        AppGraph.state.update { it.copy(idleStopAt = null) }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -78,6 +105,7 @@ class CameraService : LifecycleService() {
         AppGraph.server = srv
         AppGraph.state.value = ServerState(running = true, port = port, addresses = localAddresses())
         advertise(port)
+        scheduleIdleStop()
     }
 
     private val listener = object : CamServer.Listener {
@@ -90,6 +118,7 @@ class CameraService : LifecycleService() {
         }
 
         override fun onSessionStarted(clientName: String) {
+            cancelIdleStop()
             AppGraph.state.update { it.copy(client = clientName, streaming = null, message = null) }
             updateNotification(getString(R.string.notification_connected, clientName))
         }
@@ -107,6 +136,7 @@ class CameraService : LifecycleService() {
         }
 
         override fun onSessionEnded(clientName: String) {
+            scheduleIdleStop()
             AppGraph.state.update { it.copy(client = null, streaming = null) }
             updateNotification(getString(R.string.notification_waiting))
             releaseLocks()
@@ -114,6 +144,7 @@ class CameraService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(idleStop)
         registration?.let { reg ->
             try {
                 getSystemService(NsdManager::class.java).unregisterService(reg)
@@ -219,6 +250,7 @@ class CameraService : LifecycleService() {
         private const val CHANNEL_ID = "server"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.camandroid.app.STOP"
+        private const val IDLE_TIMEOUT_MS = 120_000L
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, CameraService::class.java))

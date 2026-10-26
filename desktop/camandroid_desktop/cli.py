@@ -196,8 +196,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--camera", choices=["back", "front"], default="back")
     p.add_argument("--torch", action="store_true")
     p.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0, help="extra clockwise rotation")
-    p.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True,
-                   help="mirror the image (default: on)")
+    p.add_argument("--mirror", action="store_true",
+                   help="flip the image (by default the front camera is mirrored and the back camera is not)")
     p.add_argument("--fill", action="store_true", help="crop to fill the frame instead of letterboxing")
     p.add_argument("--no-vcam", action="store_true", help="receive and decode only (testing)")
     p.set_defaults(func=cmd_stream)

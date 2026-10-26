@@ -81,3 +81,21 @@ def test_adb_device_list_parsing(monkeypatch):
         ("0A1B2C3D", "unauthorized", False, False),
         ("Pixel 7", "device", True, True),
     ]
+
+
+def test_adb_start_app_falls_back_to_debug_build(monkeypatch):
+    calls = []
+
+    def fake_run(args):
+        calls.append(args)
+        if "am" in args and "com.camandroid.app/com.camandroid.app.MainActivity" in args:
+            return "Error: Activity class {com.camandroid.app/...} does not exist."
+        return "Starting: Intent { act=com.camandroid.app.action.START_SERVER }"
+
+    monkeypatch.setattr(adb, "_run", fake_run)
+    assert adb.start_app("R58M123") == "com.camandroid.app.debug"
+    assert ["-s", "R58M123", "shell", "input", "keyevent", "KEYCODE_WAKEUP"] in calls
+
+    monkeypatch.setattr(adb, "_run", lambda args: "Error: not found" if "am" in args else "")
+    with pytest.raises(adb.AdbError, match="not installed"):
+        adb.start_app("R58M123")

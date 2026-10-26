@@ -189,3 +189,49 @@ def test_lag_meter():
     assert m.delay(1000 + 99 / 30 + 0.05, int(99 / 30 * 1e6)) < 0.01
     m.arrived(1000 + 100 / 30 + 2.05, int(100 / 30 * 1e6))  # a frame stuck in a buffer for 2 s
     assert abs(m.delay(1000 + 100 / 30 + 2.05, int(100 / 30 * 1e6)) - 2.0) < 0.01
+
+
+def test_usb_session_opens_the_phone_app(store, monkeypatch):
+    from camandroid_desktop import adb
+
+    phone = MockPhone()
+    try:
+        with PhoneConnection("127.0.0.1", phone.port) as conn:
+            phone.new_code()
+            conn.pair(store, phone.code)
+        started = []
+        monkeypatch.setattr(adb, "start_app", lambda serial: started.append(serial) or "com.camandroid.app")
+        monkeypatch.setattr(adb, "forward", lambda serial=None, local_port=0, remote_port=0: phone.port)
+        got = threading.Event()
+        session = StreamSession(
+            store, Target(usb=True, serial="R58M123"), StreamSettings(width=320, height=240),
+            OutputOptions(width=320, height=240), SessionCallbacks(on_preview=lambda img: got.set()),
+            virtual_camera=False, preview_interval=0,
+        )
+        session.start()
+        assert got.wait(10), "no frames over (fake) USB"
+        session.stop()
+        session.join(5)
+        assert started == ["R58M123"], "the app is opened once, not again while it answers"
+    finally:
+        phone.close()
+
+
+def test_session_gives_up_when_no_phone_answers(store, monkeypatch):
+    import socket
+
+    from camandroid_desktop import session as session_mod
+
+    monkeypatch.setattr(session_mod, "GIVE_UP_AFTER_S", 1)
+    with socket.socket() as s:  # a port nobody listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    errors, finished = [], threading.Event()
+    session = StreamSession(
+        store, Target(host="127.0.0.1", port=port), StreamSettings(),
+        OutputOptions(), SessionCallbacks(on_error=errors.append, on_finished=finished.set),
+        virtual_camera=False,
+    )
+    session.start()
+    assert finished.wait(10), "session should stop on its own"
+    assert errors and "no answer" in errors[0]

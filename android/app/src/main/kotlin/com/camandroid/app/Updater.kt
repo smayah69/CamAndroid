@@ -34,7 +34,6 @@ object Updater {
     const val VERSION_URL = "https://bombo.cu.ma/extras/camandroid/version.json"
     private const val HOST = "bombo.cu.ma"
     private const val TAG = "CamAndroid"
-    private const val AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
 
     data class Update(val versionName: String, val versionCode: Long, val url: String, val sha256: String, val size: Long)
 
@@ -50,19 +49,14 @@ object Updater {
 
     val state = MutableStateFlow<State>(State.Idle)
 
-    @Volatile private var lastCheck = 0L
-
     /** Only the release build updates itself; debug builds are a different app (.debug). */
     val enabled: Boolean get() = BuildConfig.APPLICATION_ID == "com.camandroid.app"
 
-    /** Checks in the background; [quiet] checks run at most every few hours and never show errors. */
+    /** Checks in the background (every time the app opens, and on demand); [quiet] hides errors. */
     fun check(quiet: Boolean) {
         if (!enabled) return
         val s = state.value
         if (s is State.Checking || s is State.Downloading || s is State.Ready) return
-        val now = System.currentTimeMillis()
-        if (quiet && now - lastCheck < AUTO_CHECK_INTERVAL_MS) return
-        lastCheck = now
         if (!quiet) state.value = State.Checking
         thread(name = "update-check", isDaemon = true) {
             state.value = try {

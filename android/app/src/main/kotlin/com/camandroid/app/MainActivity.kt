@@ -1,6 +1,7 @@
 package com.camandroid.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -59,9 +60,26 @@ import java.text.DateFormat
 import java.util.Date
 
 class MainActivity : ComponentActivity() {
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.action == ACTION_START_SERVER) AppGraph.autoStart.value = true
+    }
+
+    companion object {
+        /** Sent by the desktop app over USB: `adb shell am start -a <this> -n <package>/.MainActivity`. */
+        const val ACTION_START_SERVER = "com.camandroid.app.action.START_SERVER"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIntent(intent)
+        if (savedInstanceState == null) Updater.check(quiet = true) // every launch, not on rotation
         setContent {
             CamAndroidTheme {
                 MainScreen()
@@ -90,7 +108,6 @@ private fun MainScreen() {
     val code by AppGraph.pairingCode.collectAsStateWithLifecycle()
     val clients by AppGraph.pairedClients.collectAsStateWithLifecycle()
     val update by Updater.state.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { Updater.check(quiet = true) }
 
     val permissions = remember {
         buildList {
@@ -108,6 +125,14 @@ private fun MainScreen() {
     val startServer = {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (granted) CameraService.start(context) else launcher.launch(permissions)
+    }
+
+    val autoStart by AppGraph.autoStart.collectAsStateWithLifecycle()
+    LaunchedEffect(autoStart) {
+        if (autoStart) {
+            AppGraph.autoStart.value = false
+            startServer() // asks for the camera permission first if needed
+        }
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("CamAndroid") }) }) { padding ->
@@ -156,6 +181,20 @@ private fun ServerCard(state: ServerState, onStart: () -> Unit, onStop: () -> Un
                 else -> "Waiting for a computer…"
             }
             Text(status, color = MaterialTheme.colorScheme.primary)
+            state.idleStopAt?.let { stopAt ->
+                var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(stopAt) {
+                    while (true) {
+                        now = System.currentTimeMillis()
+                        delay(1000)
+                    }
+                }
+                val left = ((stopAt - now) / 1000).coerceAtLeast(0)
+                Text(
+                    "Stops by itself in ${left / 60}:${"%02d".format(left % 60)} if no computer connects.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.client != null) {
                     OutlinedButton(onClick = { AppGraph.server?.disconnectClient() }) { Text("Disconnect") }

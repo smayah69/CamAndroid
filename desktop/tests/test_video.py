@@ -3,7 +3,7 @@ import io
 import numpy as np
 from PIL import Image
 
-from camandroid_desktop.protocol import Frame
+from camandroid_desktop.protocol import FLAG_FRONT_CAMERA, Frame
 from camandroid_desktop.video import OutputOptions, render, to_array
 
 
@@ -61,8 +61,14 @@ def test_fit_letterboxes_and_fill_crops():
     assert filled.getpixel((5, 45))[1] > 200
 
 
-def test_mirror_is_on_by_default():
-    assert OutputOptions().mirror
+def test_front_camera_is_mirrored_by_default_and_checkbox_flips_it():
+    front = Frame(0, 0, FLAG_FRONT_CAMERA, frame_of(two_tone()).data)
+    assert not OutputOptions().mirror
+    assert is_blue(render(front, OutputOptions(width=200, height=100)).getpixel((20, 50)))  # mirrored
+    assert is_red(render(front, OutputOptions(width=200, height=100, mirror=True)).getpixel((20, 50)))
+    back = frame_of(two_tone())
+    assert is_red(render(back, OutputOptions(width=200, height=100)).getpixel((20, 50)))  # as seen
+    assert is_blue(render(back, OutputOptions(width=200, height=100, mirror=True)).getpixel((20, 50)))
 
 
 def test_output_size_is_exact_for_odd_ratios():

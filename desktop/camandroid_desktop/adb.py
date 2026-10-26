@@ -14,6 +14,9 @@ from .protocol import DEFAULT_PORT
 from .resources import find_bundled
 
 LOCAL_USB_PORT = 47470
+# Release and debug builds of the Android app; the action makes it start its server right away.
+APP_PACKAGES = ("com.camandroid.app", "com.camandroid.app.debug")
+START_SERVER_ACTION = "com.camandroid.app.action.START_SERVER"
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +100,26 @@ def list_phones() -> list[UsbPhone]:
 def devices() -> list[str]:
     """Serials of connected, authorized devices."""
     return [s for s, state in device_states().items() if state == "device"]
+
+
+def start_app(serial: str | None = None) -> str:
+    """Wakes the phone and opens CamAndroid with its server running. Returns the package started."""
+    serial = serial or _single_device()
+    _run(["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+    for package in APP_PACKAGES:
+        out = _run(["-s", serial, "shell", "am", "start", "-a", START_SERVER_ACTION,
+                    "-n", f"{package}/com.camandroid.app.MainActivity"])
+        if "Error" not in out:
+            log.info("adb: started %s on %s", package, serial)
+            return package
+    raise AdbError("CamAndroid is not installed on the phone. Install the APK first.")
+
+
+def _single_device() -> str:
+    found = devices()
+    if len(found) != 1:
+        raise AdbError("Connect exactly one phone by USB, or choose one with --serial.")
+    return found[0]
 
 
 def forward(serial: str | None = None, local_port: int = LOCAL_USB_PORT, remote_port: int = DEFAULT_PORT) -> int:

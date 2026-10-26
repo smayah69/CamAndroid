@@ -53,8 +53,12 @@ Select the phone and click **Start webcam**. In Zoom, Teams, Meet or any other v
 **CamAndroid** as the camera. While the phone isn't sending, the camera shows a "Waiting for the
 phone…" picture, so apps never see a broken device.
 
-You can change the camera, flashlight, quality, rotation, mirroring (on by default) and crop-to-fill
-while streaming. To change resolution or frame rate, stop the webcam first.
+You can change the camera, flashlight, quality, rotation, mirroring and crop-to-fill while
+streaming. The front camera is shown mirrored, like a mirror, and the back camera as it sees;
+*Mirror* flips either one.
+
+The phone stops its server by itself when no computer connects for 2 minutes, and the PC stops
+trying after 2 minutes without an answer from the phone. To change resolution or frame rate, stop the webcam first.
 
 The phone encodes **H.264 in hardware** and holds the camera at a fixed frame rate, so 60 fps works
 at 720p and 1080p on phones whose camera supports 60 fps (most recent ones do; others give 30).
@@ -74,7 +78,9 @@ anything on the PC.
 1. On the phone, enable *Developer options* (tap *Settings → About phone → Build number* 7 times),
    then turn on *USB debugging*.
 2. Plug in the cable and accept *Allow USB debugging?* on the phone (tick *Always allow*).
-3. The phone appears in the PC app's list with connection **USB**. Select it, then pair or start as usual.
+3. The phone appears in the PC app's list with connection **USB**. Select it, then pair or start as
+   usual. The PC wakes the phone and opens CamAndroid with its server running, so you don't need to
+   touch the phone (except to unlock it and, the first time, to show the pairing code).
 
 Most phones work with Windows' built-in USB driver. If `adb` can't see a Samsung, Xiaomi or other
 brand phone, install that manufacturer's USB driver once.
@@ -229,8 +235,8 @@ CamAndroid sends no data anywhere except what it needs to work:
   encrypted with TLS.
 - The Windows app asks `api.github.com` for the latest release when it starts and when you click
   *Check for updates*, and downloads updates from `github.com` only when you click to install.
-- The Android app reads `bombo.cu.ma/extras/camandroid/version.json` when it opens (at most every
-  6 hours) and when you tap *Check for updates*, and downloads updates from there only when you tap
+- The Android app reads `bombo.cu.ma/extras/camandroid/version.json` every time it opens and when
+  you tap *Check for updates*, and downloads updates from there only when you tap
   to download.
 
 These requests carry nothing but the app version (in the User-Agent). There are no accounts,

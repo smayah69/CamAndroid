@@ -121,7 +121,7 @@ class App:
         self.quality = tk.IntVar(value=80)
         self.camera = tk.StringVar(value="back")
         self.rotate = tk.StringVar(value="0")
-        self.mirror = tk.BooleanVar(value=True)
+        self.mirror = tk.BooleanVar(value=False)  # flips the default: front camera mirrored, back not
         self.fill = tk.BooleanVar(value=False)
         self.torch = tk.BooleanVar(value=False)
 
@@ -304,6 +304,8 @@ class App:
         if kind == "usb":
             target = self._usb_target(key)
             if target:
+                # Open CamAndroid on the phone (server running) so "Pair new computer" is right there.
+                threading.Thread(target=self._start_phone_app, args=(target.serial,), daemon=True).start()
                 self._pair(target)
             return
         found = self.discovered.get(key) if key else None
@@ -323,6 +325,13 @@ class App:
             return
         host, _, port = text.strip().partition(":")
         self._pair(Target(host=host, port=int(port) if port.isdigit() else protocol.DEFAULT_PORT))
+
+    @staticmethod
+    def _start_phone_app(serial: str | None) -> None:
+        try:
+            adb.start_app(serial)
+        except adb.AdbError as e:
+            log.warning("Could not open CamAndroid on the phone: %s", e)
 
     def _pair(self, target: Target) -> None:
         code = simpledialog.askstring(
@@ -524,6 +533,13 @@ class App:
         self.status.set(f"Update available: CamAndroid {release.version} (see About)")
         if not quiet:
             self.tabs.select(2)
+        elif not self.session and messagebox.askyesno(
+                "Update available",
+                f"CamAndroid {release.version} is available (you have {__version__}).\n\n"
+                + ("Download and install it now?" if can_install else "Open the download page?"),
+                parent=self.root):
+            # Checked at every start; asked only while the webcam isn't running.
+            self.install_update()
 
     def install_update(self) -> None:
         release = self.release
@@ -554,6 +570,12 @@ class App:
 
     def _run_installer(self, path) -> None:
         log.info("Starting installer %s", path)
+        # PyInstaller passes its own variables (_PYI_*) to child processes. The installer would hand
+        # them to the new CamAndroid it starts, which would then look for its Python DLL in this
+        # (soon deleted) process's temp folder: "Failed to load Python DLL".
+        for key in [k for k in os.environ if k.upper().startswith(("_PYI_", "_MEIPASS"))]:
+            del os.environ[key]
+        os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         try:
             os.startfile(path)  # noqa: S606 - verified download from our GitHub releases
         except OSError as e:
