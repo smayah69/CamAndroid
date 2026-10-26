@@ -140,7 +140,20 @@ class Renderer:
         self._h264: H264Decoder | None = None
         self.codec = ""
 
-    def render(self, frame: Frame) -> np.ndarray | None:
+    def render(self, frame: Frame, show: bool = True) -> np.ndarray | None:
+        """The frame as an RGB image of the output size, or None when there is nothing to show yet.
+
+        With show=False the frame is only decoded (H.264 frames depend on each other), which is
+        how the session catches up when frames arrive faster than they can be displayed.
+        """
+        if not show:
+            if frame.data[:2] != JPEG_MAGIC:
+                if self._h264 is None:
+                    self._h264 = H264Decoder()
+                    log.info("Decoding H.264 with %s", self._h264.name)
+                self.codec = "h264"
+                self._h264.decode(frame)
+            return None
         # The GUI changes rotate/mirror/fill from another thread; use one consistent snapshot.
         opts = dataclasses.replace(self.opts)
         rotation = (frame.rotation + opts.rotate) % 360

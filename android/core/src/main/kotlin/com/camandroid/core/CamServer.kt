@@ -113,6 +113,9 @@ class CamServer(
                 }
                 registered = true
                 socket.soTimeout = 0
+                // A small kernel buffer makes a slow network push back on the frame queue within
+                // ~0.1 s, so frames get dropped there. Android's default can hold seconds of video.
+                socket.sendBufferSize = SEND_BUFFER_BYTES
                 writer.writeControl(buildJsonObject {
                     put("op", "auth_ok")
                     putJsonArray("cameras") { source.cameras().forEach { add(it) } }
@@ -326,6 +329,7 @@ class CamServer(
     companion object {
         const val HANDSHAKE_TIMEOUT_MS = 15_000
         const val MAX_PENDING_CONNECTIONS = 4
+        const val SEND_BUFFER_BYTES = 128 * 1024
 
         /** About a quarter of a second of frames may queue up before they are dropped. */
         fun backlogFor(fps: Int) = maxOf(2, fps / 4)

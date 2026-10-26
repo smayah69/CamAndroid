@@ -45,7 +45,7 @@ SmartScreen may warn about an unknown publisher. Choose *More info → Run anywa
 3. On the PC, open **CamAndroid**, select the phone (it is found automatically on the same Wi-Fi), click
    **Pair…** and type the code.
 
-If discovery is blocked (guest Wi-Fi, client isolation), use **Pair by address…** with the IP shown in the app.
+If the phone isn't in the list (guest Wi-Fi, client isolation), click **Pair…** with nothing selected and type the IP shown in the app.
 
 ### 3. Stream
 
@@ -242,7 +242,7 @@ analytics or tracking.
 
 ## Troubleshooting
 
-- **Phone not discovered**: some routers block mDNS between clients. Use *Pair by address* with the IP
+- **Phone not discovered**: some routers block mDNS between clients. Click *Pair…* with no phone selected and type the IP
   shown in the app, or use USB.
 - **CamAndroid camera missing in an app**: run `camandroid camera status` (or check the top of the
   Webcam panel), install it, then **restart the video app**, because apps list cameras when they start.

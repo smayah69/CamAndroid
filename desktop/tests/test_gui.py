@@ -36,6 +36,19 @@ def test_tabs_and_defaults(app):
     assert app.fps.get() == "60"
 
 
+def _buttons(widget):
+    for child in widget.winfo_children():
+        if child.winfo_class() == "TButton":
+            yield child.cget("text")
+        yield from _buttons(child)
+
+
+def test_single_pair_button(app):
+    labels = list(_buttons(app.root))
+    assert labels.count("Pair…") == 1
+    assert not any("address" in label.lower() for label in labels)
+
+
 def test_usb_and_wifi_phones_show_connection(app):
     phone = discovery.DiscoveredPhone("CamAndroid Pixel", "192.168.1.20", 4747, "abcd")
     app.events.put(("discovered", [phone]))

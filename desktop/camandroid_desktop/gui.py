@@ -102,9 +102,10 @@ class App:
         self.tree.grid(row=0, column=0, columnspan=3, sticky="nsew")
         self.tree.bind("<Double-1>", lambda _e: self.toggle_stream() if not self.session else None)
 
-        ttk.Button(left, text="Pair…", command=self.pair_selected).grid(row=1, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(left, text="Pair by address…", command=self.pair_by_address).grid(
-            row=1, column=1, sticky="ew", pady=(8, 0), padx=4)
+        # One button: pairs the selected phone, or asks for its address when none is selected
+        # (or discovery can't see it, e.g. on guest Wi-Fi).
+        ttk.Button(left, text="Pair…", command=self.pair_selected).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0), padx=(0, 4))
         ttk.Button(left, text="Forget", command=self.forget_selected).grid(row=1, column=2, sticky="ew", pady=(8, 0))
         ttk.Label(left, text="Phones on your Wi-Fi show up automatically, and so do phones plugged in by USB "
                              "with USB debugging on. On the phone: open CamAndroid, tap Start, then "
@@ -226,7 +227,7 @@ class App:
             self.browser = PhoneBrowser(on_change=lambda phones: self.events.put(("discovered", phones)))
         except Exception as e:  # noqa: BLE001 - discovery is optional (e.g. firewall, no zeroconf)
             log.warning("Network discovery unavailable: %s", e)
-            self.status.set(f"Network discovery unavailable: {e}. Use 'Pair by address'.")
+            self.status.set(f"Network discovery unavailable: {e}. Click Pair… and type the phone's address.")
 
     def _poll_usb(self) -> None:
         last: list[adb.UsbPhone] | None = None
@@ -298,6 +299,7 @@ class App:
         return Target(usb=True, serial=phone.serial, label=phone.model)
 
     def pair_selected(self) -> None:
+        """Pairs the selected phone if it isn't paired yet; otherwise asks for an address."""
         kind, key = self._selected()
         if kind == "usb":
             target = self._usb_target(key)
@@ -305,14 +307,18 @@ class App:
                 self._pair(target)
             return
         found = self.discovered.get(key) if key else None
-        if not found:
-            self.pair_by_address()
+        if kind == "new" and found:
+            self._pair(Target(host=found.host, port=found.port))
             return
-        self._pair(Target(host=found.host, port=found.port))
-
-    def pair_by_address(self) -> None:
-        text = simpledialog.askstring("Pair by address", "Phone address shown in the app (e.g. 192.168.1.20):",
-                                      parent=self.root)
+        # A phone that is already paired (re-pair it, e.g. after reinstalling the app) or one the
+        # network discovery can't see: ask for the address, filled in when we know it.
+        dev = self.store.find(key) if kind == "paired" else None
+        known = f"{found.host}" if found else (dev.host if dev and dev.host else "")
+        text = simpledialog.askstring(
+            "Pair a phone",
+            "Address shown in the CamAndroid app on the phone (e.g. 192.168.1.20).\n"
+            "Phones on your Wi-Fi or plugged in by USB also appear in the list: select one and click Pair.",
+            initialvalue=known, parent=self.root)
         if not text:
             return
         host, _, port = text.strip().partition(":")

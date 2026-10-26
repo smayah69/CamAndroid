@@ -146,3 +146,46 @@ def test_session_uses_best_common_codec(store, codecs):
         assert got[-1].size == (640, 360)
     finally:
         phone.close()
+
+
+def test_slow_computer_does_not_fall_behind(store):
+    """When showing frames is slower than the phone sends them, old frames are skipped instead
+    of piling up as seconds of delay."""
+    import time
+
+    phone = MockPhone()
+    try:
+        with PhoneConnection("127.0.0.1", phone.port) as conn:
+            phone.new_code()
+            device = conn.pair(store, phone.code)
+        shown = []
+
+        def slow_preview(img):
+            shown.append(time.monotonic())
+            time.sleep(0.15)  # about 6 fps on screen, while the phone sends ~50 fps
+
+        session = StreamSession(
+            store, Target(device=device), StreamSettings(width=320, height=240),
+            OutputOptions(width=320, height=240), SessionCallbacks(on_preview=slow_preview),
+            virtual_camera=False, preview_interval=0,
+        )
+        session.start()
+        time.sleep(3)
+        session.stop()
+        session.join(5)
+        assert len(shown) >= 5
+        assert session.fps > 2 * len(shown) / 3, "frames should still be received at full speed"
+        assert session.delay < 0.5, f"video fell {session.delay:.1f} s behind"
+    finally:
+        phone.close()
+
+
+def test_lag_meter():
+    from camandroid_desktop.session import LagMeter
+
+    m = LagMeter()
+    for i in range(100):  # on time: arrival = capture + 0.05 s (+ clock offset 1000 s)
+        m.arrived(1000 + i / 30 + 0.05, int(i / 30 * 1e6))
+    assert m.delay(1000 + 99 / 30 + 0.05, int(99 / 30 * 1e6)) < 0.01
+    m.arrived(1000 + 100 / 30 + 2.05, int(100 / 30 * 1e6))  # a frame stuck in a buffer for 2 s
+    assert abs(m.delay(1000 + 100 / 30 + 2.05, int(100 / 30 * 1e6)) - 2.0) < 0.01
