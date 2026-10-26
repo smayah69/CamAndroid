@@ -198,6 +198,7 @@ class StreamSession(threading.Thread):
                      self.settings.codecs, self.settings.width, self.settings.height, self.settings.fps)
             self._status(f"Connected to {device.name}, waiting for video…")
             renderer = Renderer(self.output)
+            bad_frames = 0
             last_preview = 0.0
             window_start, window_frames, window_bytes = time.monotonic(), 0, 0
             while not self._stop_event.is_set():
@@ -208,7 +209,16 @@ class StreamSession(threading.Thread):
                         log.info("Phone %s: %s", msg.get("op"), {k: v for k, v in msg.items() if k != "op"})
                     continue
                 window_bytes += len(msg.data)
-                arr = renderer.render(msg)
+                try:
+                    arr = renderer.render(msg)
+                except Exception:  # noqa: BLE001 - one bad frame must not stop the webcam
+                    bad_frames += 1
+                    if bad_frames == 1:
+                        log.exception("Could not render a frame; skipping it")
+                    if bad_frames >= 60:
+                        raise
+                    continue
+                bad_frames = 0
                 if arr is None:
                     continue
                 if vcam:

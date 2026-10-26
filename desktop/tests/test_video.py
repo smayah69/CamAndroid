@@ -1,5 +1,6 @@
 import io
 
+import numpy as np
 from PIL import Image
 
 from camandroid_desktop.protocol import Frame
@@ -72,3 +73,30 @@ def test_output_size_is_exact_for_odd_ratios():
                 out = render(frame_of(img, rotation), OutputOptions(width=640, height=360, fill=fill))
                 assert out.size == (640, 360)
 
+
+
+
+def test_toggling_fill_mid_frame_uses_one_snapshot(monkeypatch):
+    """The GUI thread flips "Crop to fill" while the session thread renders a frame."""
+    from camandroid_desktop import video
+
+    opts = OutputOptions(width=1920, height=1080, fill=True)
+    real = video._scaled_size
+
+    def scaled_then_toggle(size, swap, o):
+        result = real(size, swap, o)
+        opts.fill = not opts.fill  # the click lands between sizing and composing
+        return result
+
+    monkeypatch.setattr(video, "_scaled_size", scaled_then_toggle)
+    renderer = video.Renderer(opts)
+    portrait = frame_of(Image.new("RGB", (1080, 1920), (0, 255, 0)))
+    for _ in range(4):
+        assert renderer.render(portrait).shape == (1080, 1920, 3)
+
+
+def test_compose_never_overflows_the_canvas():
+    from camandroid_desktop.video import compose
+
+    big = np.zeros((3413, 1920, 3), dtype=np.uint8)
+    assert compose(big, 0, OutputOptions(width=1920, height=1080, fill=False, mirror=False)).shape == (1080, 1920, 3)

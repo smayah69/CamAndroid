@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import io
 import logging
@@ -140,7 +141,8 @@ class Renderer:
         self.codec = ""
 
     def render(self, frame: Frame) -> np.ndarray | None:
-        opts = self.opts
+        # The GUI changes rotate/mirror/fill from another thread; use one consistent snapshot.
+        opts = dataclasses.replace(self.opts)
         rotation = (frame.rotation + opts.rotate) % 360
         swap = rotation in (90, 270)
         if frame.data[:2] == JPEG_MAGIC:
@@ -199,6 +201,10 @@ def compose(arr: np.ndarray, rotation: int, opts: OutputOptions) -> np.ndarray:
         h, w = arr.shape[:2]
         if (w, h) == (opts.width, opts.height):
             return arr
+    if h > opts.height or w > opts.width:  # never overflow the canvas, whatever the input
+        top, left = max(0, (h - opts.height) // 2), max(0, (w - opts.width) // 2)
+        arr = arr[top : top + opts.height, left : left + opts.width]
+        h, w = arr.shape[:2]
     canvas = np.zeros((opts.height, opts.width, 3), dtype=np.uint8)
     top, left = (opts.height - h) // 2, (opts.width - w) // 2
     canvas[top : top + h, left : left + w] = arr
