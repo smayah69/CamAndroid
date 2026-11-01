@@ -277,7 +277,7 @@ jobs:
           (Get-Content $f) -replace '^__version__ = ".*"$', "__version__ = `"$env:VERSION_NAME`"" | Set-Content $f
           Select-String '__version__' $f
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: vcam-build
           path: windows/vcam/dist
@@ -509,17 +509,17 @@ jobs:
         with:
           fetch-depth: 0  # history and tags for the change list
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: android-apk
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: camandroid-windows
           path: dist
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: needs.android.outputs.signing == 'generated'
         with:
           name: new-signing-keystore
